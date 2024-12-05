@@ -1,0 +1,23 @@
+// Automatically upgrade packages from these sources
+Unattended-Upgrade::Origins-Pattern {
+    "o=Debian,a=stable";
+    "o=Debian,a=stable-updates";
+    "o=Debian-security,a=stable";
+};
+
+// List of packages to not update
+Unattended-Upgrade::Package-Blacklist {
+//      "vim";
+//      "libc6";
+//      "libc6-dev";
+//      "libc6-i686";
+};
+
+// Send email to this address if there’s a problem
+Unattended-Upgrade::Mail "root";
+
+// Do automatic removal of unused dependencies after the upgrade
+Unattended-Upgrade::Remove-Unused-Dependencies "true";
+
+// Automatically reboot *WITHOUT CONFIRMATION* if a file needs a reboot after the upgrade
+Unattended-Upgrade::Automatic-Reboot "true";

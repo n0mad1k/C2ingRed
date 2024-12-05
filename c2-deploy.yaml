@@ -1,0 +1,154 @@
+---
+- name: Create and configure Linode instance for C2 Server
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  vars_files:
+    - c2-vars.yaml
+  tasks:
+    - name: Select a random region
+      set_fact:
+        selected_region: "{{ region_choices | random }}"
+
+    - name: Create Linode instance
+      community.general.linode_v4:
+        access_token: "{{ linode_token }}"
+        label: "{{ instance_label }}"
+        type: "{{ plan }}"
+        region: "{{ selected_region }}"
+        image: "{{ image }}"
+        root_pass: "{{ lookup('password', '/dev/null length=16') }}"
+        authorized_keys:
+          - "{{ lookup('file', ssh_key_path) }}"
+        state: present
+      register: linode_instance
+
+    - name: Wait for Linode instance to be reachable
+      wait_for:
+        host: "{{ linode_instance.instance.ipv4[0] }}"
+        port: 22
+        delay: 60
+        timeout: 600
+        state: started
+
+    - name: Add Linode instance to inventory
+      add_host:
+        name: "{{ instance_label }}"
+        ansible_host: "{{ linode_instance.instance.ipv4[0] }}"
+        ansible_user: root
+
+- name: Secure and configure C2 server
+  hosts: "{{ instance_label }}"
+  gather_facts: true
+  tasks:
+    - name: Disable root password authentication for SSH immediately
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?PasswordAuthentication'
+        line: 'PasswordAuthentication no'
+        state: present
+
+    - name: Restart SSH service to apply root password login restriction
+      ansible.builtin.service:
+        name: ssh
+        state: restarted
+
+    - name: Update apt package list
+      ansible.builtin.apt:
+        update_cache: yes
+
+    - name: Upgrade all packages
+      ansible.builtin.apt:
+        upgrade: dist
+
+    - name: Install base utilities and tools via apt
+      ansible.builtin.apt:
+        name:
+          - git
+          - wget
+          - curl
+          - unzip
+          - python3-pip
+          - python3-venv
+          - tmux
+          - pipx
+          - nmap
+          - netcat
+          - tcpdump
+          - hydra
+          - john
+          - hashcat
+          - sqlmap
+          - gobuster
+          - dirb
+          - enum4linux
+          - dnsenum
+          - seclists
+          - responder
+          - setoolkit
+          - golang
+          - proxychains
+          - tor
+        state: present
+
+    - name: Ensure pipx path is configured
+      ansible.builtin.shell: |
+        pipx ensurepath
+      args:
+        executable: /bin/bash
+
+    - name: Install tools via pipx
+      ansible.builtin.shell: |
+        pipx install git+https://github.com/Pennyw0rth/NetExec
+        pipx install sprayingtoolkit
+      args:
+        executable: /bin/bash
+
+    - name: Install tools via pip
+      ansible.builtin.shell: |
+        pip3 install impacket crackmapexec
+      args:
+        executable: /bin/bash
+
+    - name: Download Kerbrute
+      ansible.builtin.shell: |
+        mkdir -p ~/Tools/Kerbrute
+        wget https://github.com/ropnop/kerbrute/releases/latest/download/kerbrute_linux_amd64 -O ~/Tools/Kerbrute/kerbrute
+        chmod +x ~/Tools/Kerbrute/kerbrute
+      args:
+        executable: /bin/bash
+
+    - name: Clone SharpCollection nightly builds
+      ansible.builtin.git:
+        repo: https://github.com/Flangvik/SharpCollection.git
+        dest: ~/Tools/SharpCollection
+        version: master
+
+    - name: Clone PEASS-ng
+      ansible.builtin.git:
+        repo: https://github.com/carlospolop/PEASS-ng.git
+        dest: ~/Tools/PEASS-ng
+
+    - name: Clone MailSniper
+      ansible.builtin.git:
+        repo: https://github.com/dafthack/MailSniper.git
+        dest: ~/Tools/MailSniper
+
+    - name: Clone Inveigh
+      ansible.builtin.git:
+        repo: https://github.com/Kevin-Robertson/Inveigh.git
+        dest: ~/Tools/Inveigh
+
+    - name: Install Sliver C2 server
+      ansible.builtin.shell: |
+        curl https://sliver.sh/install | sudo bash
+        systemctl enable sliver
+        systemctl start sliver
+
+    - name: Install Metasploit Framework (Nightly Build)
+      ansible.builtin.shell: |
+        curl https://raw.githubusercontent.com/rapid7/metasploit-framework/master/msfinstall > ~/Tools/msfinstall
+        chmod 755 ~/Tools/msfinstall
+        ~/Tools/msfinstall
+      args:
+        executable: /bin/bash

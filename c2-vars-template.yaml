@@ -1,0 +1,16 @@
+linode_token: "TOKEN"
+region_choices:
+  - us-east
+  - us-southeast
+  - us-central
+  - us-west
+  - ca-central
+  - eu-west
+  - eu-central
+  - ap-south
+  - ap-southeast
+  - ap-southeast-2
+  - ap-northeast
+plan: "g6-standard-4"
+image: "linode/kali"
+base_url: "{{ ansible_host }}"
