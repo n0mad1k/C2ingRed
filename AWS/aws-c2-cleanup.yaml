@@ -1,0 +1,12 @@
+---
+- name: Cleanup AWS EC2 instance
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Terminate EC2 instance
+      amazon.aws.ec2_instance:
+        aws_access_key: "{{ aws_access_key }}"
+        aws_secret_key: "{{ aws_secret_key }}"
+        name: "{{ instance_label }}"
+        region: "{{ aws_region }}"
+        state: absent

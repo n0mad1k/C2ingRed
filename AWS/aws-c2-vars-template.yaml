@@ -1,0 +1,18 @@
+aws_access_key: "YOUR_AWS_ACCESS_KEY"  # Your AWS access key
+aws_secret_key: "YOUR_AWS_SECRET_KEY"  # Your AWS secret key
+aws_region_choices:
+  - us-east-1
+  - us-west-1
+  - us-west-2
+  - eu-central-1
+  - eu-west-1
+  - eu-west-2
+  - ap-south-1
+  - ap-northeast-1
+  - ap-southeast-1
+  - ap-southeast-2
+  - sa-east-1
+aws_key_name: "aws-c2-key"  # Name of the key pair
+aws_security_group: "aws-c2-sg"  # Security group name
+aws_instance_type: "t2.medium"  # EC2 instance type
+aws_ami: "ami-061b17d332829ab1c"  # Kali Linux AMI

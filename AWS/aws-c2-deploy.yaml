@@ -1,44 +1,75 @@
 ---
-- name: Create and configure Linode instance for C2 Server
+- name: Create and configure AWS EC2 instance for C2 Server
   hosts: localhost
   gather_facts: false
   connection: local
   vars_files:
-    - c2-vars.yaml
+    - vars.yaml
   tasks:
-    - name: Select a random region
+    - name: Select a random AWS region
       set_fact:
-        selected_region: "{{ region_choices | random }}"
+        selected_aws_region: "{{ aws_region_choices | random }}"
 
-    - name: Create Linode instance
-      community.general.linode_v4:
-        access_token: "{{ linode_token }}"
-        label: "{{ instance_label }}"
-        type: "{{ plan }}"
-        region: "{{ selected_region }}"
-        image: "{{ image }}"
-        root_pass: "{{ lookup('password', '/dev/null length=16') }}"
-        authorized_keys:
-          - "{{ lookup('file', ssh_key_path) }}"
-        state: present
-      register: linode_instance
+    - name: Create an EC2 key pair
+      amazon.aws.ec2_key:
+        aws_access_key: "{{ aws_access_key }}"
+        aws_secret_key: "{{ aws_secret_key }}"
+        name: "{{ aws_key_name }}"
+        region: "{{ selected_aws_region }}"
+      register: key_pair
 
-    - name: Wait for Linode instance to be reachable
+    - name: Save private key locally
+      copy:
+        content: "{{ key_pair.key.private_key }}"
+        dest: "~/.ssh/{{ aws_key_name }}.pem"
+        mode: "0600"
+      when: key_pair.changed
+
+    - name: Create security group
+      amazon.aws.ec2_group:
+        aws_access_key: "{{ aws_access_key }}"
+        aws_secret_key: "{{ aws_secret_key }}"
+        name: "{{ aws_security_group }}"
+        description: "C2 Server Security Group"
+        region: "{{ selected_aws_region }}"
+        rules:
+          - proto: tcp
+            ports:
+              - 22  # SSH
+              - 80  # HTTP
+              - 443 # HTTPS
+            cidr_ip: 0.0.0.0/0
+      register: security_group
+
+    - name: Launch EC2 instance
+      amazon.aws.ec2_instance:
+        aws_access_key: "{{ aws_access_key }}"
+        aws_secret_key: "{{ aws_secret_key }}"
+        name: "{{ instance_label }}"
+        region: "{{ selected_aws_region }}"
+        image_id: "{{ aws_ami }}"
+        instance_type: "{{ aws_instance_type }}"
+        key_name: "{{ aws_key_name }}"
+        security_group: "{{ aws_security_group }}"
+        wait: yes
+      register: ec2_instance
+
+    - name: Wait for instance to be reachable
       wait_for:
-        host: "{{ linode_instance.instance.ipv4[0] }}"
+        host: "{{ ec2_instance.public_ip }}"
         port: 22
-        delay: 60
-        timeout: 600
+        delay: 10
+        timeout: 300
         state: started
 
-    - name: Add Linode instance to inventory
+    - name: Add EC2 instance to inventory
       add_host:
         name: "{{ instance_label }}"
-        ansible_host: "{{ linode_instance.instance.ipv4[0] }}"
-        ansible_user: root
-        ansible_ssh_private_key_file: "{{ ssh_key_path | replace('.pub', '') }}"
+        ansible_host: "{{ ec2_instance.public_ip }}"
+        ansible_user: ec2-user
+        ansible_ssh_private_key_file: "~/.ssh/{{ aws_key_name }}.pem"
 
-- name: Secure and configure C2 server
+- name: Secure and configure AWS EC2 server
   hosts: "{{ instance_label }}"
   gather_facts: true
   tasks:
@@ -49,7 +80,7 @@
         line: 'PasswordAuthentication no'
         state: present
 
-    - name: Restart SSH service to apply root password login restriction
+    - name: Restart SSH service
       ansible.builtin.service:
         name: ssh
         state: restarted
@@ -57,10 +88,6 @@
     - name: Update apt package list
       ansible.builtin.apt:
         update_cache: yes
-
-    - name: Upgrade all packages
-      ansible.builtin.apt:
-        upgrade: dist
 
     - name: Install base utilities and tools via apt
       ansible.builtin.apt:
@@ -88,6 +115,7 @@
           - golang
           - proxychains
           - tor
+          - crackmapexec
         state: present
 
     - name: Ensure pipx path is configured
@@ -103,7 +131,6 @@
         pipx install git+https://github.com/Pennyw0rth/NetExec
         pipx install git+https://github.com/blacklanternsecurity/TREVORspray
         pipx install impacket
-        pipx install crackmapexec
       args:
         executable: /bin/bash
 
@@ -144,7 +171,7 @@
 
     - name: Install Metasploit Framework (Nightly Build)
       ansible.builtin.shell: |
-        curl https://raw.githubusercontent.com/rapid7/metasploit-framework/master/msfinstall > ~/Tools/msfinstall
+        curl https://raw.githubusercontent.com/rapid7/metasploit-omnibus/master/config/templates/metasploit-framework-wrappers/msfupdate.erb > ~/Tools/msfinstall
         chmod 755 ~/Tools/msfinstall
         ~/Tools/msfinstall
       args:

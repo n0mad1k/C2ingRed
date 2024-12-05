@@ -1,11 +1,12 @@
 ---
 - name: Cleanup Linode instance
   hosts: localhost
-  connection: local
   gather_facts: false
+  vars_files:
+    - c2-vars.yaml
   tasks:
     - name: Delete Linode instance
-      community.general.linode_v4:
-        access_token: "{{ linode_token }}"
-        label: "{{ instance_label }}"
+      community.general.linode:
+        token: "{{ linode_token }}"
         state: absent
+        label: "{{ instance_label }}"

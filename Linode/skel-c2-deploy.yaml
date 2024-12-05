@@ -1,0 +1,90 @@
+---
+- name: Create and configure Linode instance for C2 Server
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  vars_files:
+    - c2-vars.yaml
+  tasks:
+    - name: Select a random region
+      set_fact:
+        selected_region: "{{ region_choices | random }}"
+
+    - name: Create Linode instance
+      community.general.linode_v4:
+        access_token: "{{ linode_token }}"
+        label: "{{ instance_label }}"
+        type: "{{ plan }}"
+        region: "{{ selected_region }}"
+        image: "{{ image }}"
+        root_pass: "{{ lookup('password', '/dev/null length=16') }}"
+        authorized_keys:
+          - "{{ lookup('file', ssh_key_path) }}"
+        state: present
+      register: linode_instance
+
+    - name: Wait for Linode instance to be reachable
+      wait_for:
+        host: "{{ linode_instance.instance.ipv4[0] }}"
+        port: 22
+        delay: 60
+        timeout: 600
+        state: started
+
+    - name: Add Linode instance to inventory
+      add_host:
+        name: "{{ instance_label }}"
+        ansible_host: "{{ linode_instance.instance.ipv4[0] }}"
+        ansible_user: root
+        ansible_ssh_private_key_file: "{{ ssh_key_path | replace('.pub', '') }}"
+
+- name: Secure and configure C2 server
+  hosts: "{{ instance_label }}"
+  gather_facts: true
+  tasks:
+    - name: Disable root password authentication for SSH immediately
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?PasswordAuthentication'
+        line: 'PasswordAuthentication no'
+        state: present
+
+    - name: Restart SSH service to apply root password login restriction
+      ansible.builtin.service:
+        name: ssh
+        state: restarted
+
+    - name: Update apt package list
+      ansible.builtin.apt:
+        update_cache: yes
+
+    - name: Upgrade all packages
+      ansible.builtin.apt:
+        upgrade: dist
+
+    - name: Install base utilities and tools via apt
+      ansible.builtin.apt:
+        name:
+          - git
+          - wget
+          - curl
+          - unzip
+          - nmap
+          - golang
+          - proxychains
+          - tor
+        state: present
+
+    - name: Install Sliver C2 server
+      ansible.builtin.shell: |
+        curl https://sliver.sh/install | sudo bash
+        systemctl enable sliver
+        systemctl start sliver
+
+    - name: Install Metasploit Framework (Nightly Build)
+      ansible.builtin.shell: |
+        curl https://raw.githubusercontent.com/rapid7/metasploit-framework/master/msfinstall > ~/Tools/msfinstall
+        chmod 755 ~/Tools/msfinstall
+        ~/Tools/msfinstall
+      args:
+        executable: /bin/bash
