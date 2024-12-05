@@ -2,3 +2,4 @@ ansible
 linode_api4
 boto3
 botocore
+awscli

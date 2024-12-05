@@ -1,12 +1,31 @@
----
 - name: Cleanup AWS EC2 instance
   hosts: localhost
   gather_facts: false
+  connection: local
+  vars_files:
+    - vars.yaml
   tasks:
     - name: Terminate EC2 instance
       amazon.aws.ec2_instance:
-        aws_access_key: "{{ aws_access_key }}"
-        aws_secret_key: "{{ aws_secret_key }}"
+        aws_access_key: "{{ aws_access_key | default(omit) }}"
+        aws_secret_key: "{{ aws_secret_key | default(omit) }}"
+        region: "{{ selected_aws_region }}"
+        instance_ids: "{{ ec2_instance_id }}"
+        state: absent
+      when: ec2_instance_id is defined
+      no_log: true
+
+    - name: Remove EC2 key pair
+      amazon.aws.ec2_key:
+        access_key: "{{ aws_access_key | default(omit) }}"
+        secret_key: "{{ aws_secret_key | default(omit) }}"
+        session_token: "{{ aws_session_token | default(omit) }}"
         name: "{{ instance_label }}"
-        region: "{{ aws_region }}"
+        region: "{{ selected_aws_region }}"
+        state: absent
+      when: ec2_termination.changed
+
+    - name: Delete private key file
+      ansible.builtin.file:
+        path: "~/.ssh/{{ instance_label }}.pem"
         state: absent

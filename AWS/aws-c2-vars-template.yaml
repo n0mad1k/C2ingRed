@@ -2,15 +2,37 @@ aws_access_key: "YOUR_AWS_ACCESS_KEY"  # Your AWS access key
 aws_secret_key: "YOUR_AWS_SECRET_KEY"  # Your AWS secret key
 aws_region_choices:
   - us-east-1
+  - us-east-2
   - us-west-1
   - us-west-2
   - eu-central-1
   - eu-west-1
   - eu-west-2
-  - ap-south-1
+  - eu-west-3
+  - eu-north-1
+  - ap-south-1 
+  - ap-northeast-1 
+  - ap-northeast-2 
+  - ap-northeast-3
   - ap-northeast-1
   - ap-southeast-1
   - ap-southeast-2
   - sa-east-1
+ami_map:
+  us-east-1: ami-061b17d332829ab1c
+  us-east-2: ami-0660adabce908186c
+  us-west-1: ami-0eb5320adc0687ec7
+  us-west-2: ami-0c3eda889e76c9449
+  eu-central-1: ami-07ba777ee9c0e3d1d
+  eu-west-1: ami-0a65bb797d7827816
+  eu-west-2: ami-064bcc559ed64da4e
+  eu-west-3: ami-0d9804c5d28fcef48
+  eu-north-1: ami-0a46659bb2f9be3d3
+  ap-south-1: ami-0dc17a04758852cee
+  ap-northeast-1: ami-0ac2a5e7896fd1fca
+  ap-northeast-2: ami-09f1d6ad17803c013
+  ap-northeast-3: ami-07ac18c20a70965e8
+  ap-southeast-1: ami-0bbbffc87127c6352
+  ap-southeast-2: ami-07d7ca6698b8cbcbc
+  sa-east-1: ami-069fe283f382ad911
 aws_instance_type: "t2.medium"  # EC2 instance type
-aws_ami: "ami-061b17d332829ab1c"  # Kali Linux AMI

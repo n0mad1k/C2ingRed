@@ -10,47 +10,50 @@
       set_fact:
         selected_aws_region: "{{ aws_region_choices | random }}"
 
+    - name: Set AMI ID based on region
+      set_fact:
+        aws_ami: "{{ ami_map[selected_aws_region] }}"
+
+    - name: Debug AWS Credentials
+      debug:
+        msg:
+          - "Access Key: {{ aws_access_key }}"
+          - "Secret Key: {{ aws_secret_key }}"
+          - "Region: {{ selected_aws_region }}"
+          - "AMI: {{ aws_ami }}"
+
     - name: Create an EC2 key pair
       amazon.aws.ec2_key:
-        aws_access_key: "{{ aws_access_key }}"
-        aws_secret_key: "{{ aws_secret_key }}"
-        name: "{{ aws_key_name }}"
+        access_key: "{{ aws_access_key }}"
+        secret_key: "{{ aws_secret_key }}"
+        name: "{{ instance_label }}"
         region: "{{ selected_aws_region }}"
+        state: present
       register: key_pair
+
+    - name: Debug Key Pair
+      debug:
+        var: key_pair
 
     - name: Save private key locally
       copy:
         content: "{{ key_pair.key.private_key }}"
-        dest: "~/.ssh/{{ aws_key_name }}.pem"
+        dest: "~/.ssh/{{ instance_label }}.pem"
         mode: "0600"
       when: key_pair.changed
-
-    - name: Create security group
-      amazon.aws.ec2_group:
-        aws_access_key: "{{ aws_access_key }}"
-        aws_secret_key: "{{ aws_secret_key }}"
-        name: "{{ aws_security_group }}"
-        description: "C2 Server Security Group"
-        region: "{{ selected_aws_region }}"
-        rules:
-          - proto: tcp
-            ports:
-              - 22  # SSH
-              - 80  # HTTP
-              - 443 # HTTPS
-            cidr_ip: 0.0.0.0/0
-      register: security_group
+    #  no_log: true
 
     - name: Launch EC2 instance
       amazon.aws.ec2_instance:
-        aws_access_key: "{{ aws_access_key }}"
-        aws_secret_key: "{{ aws_secret_key }}"
-        name: "{{ instance_label }}"
+        aws_access_key: "{{ aws_access_key | default(omit) }}"
+        aws_secret_key: "{{ aws_secret_key | default(omit) }}"
         region: "{{ selected_aws_region }}"
+        name: "{{ instance_label }}"
         image_id: "{{ aws_ami }}"
         instance_type: "{{ aws_instance_type }}"
-        key_name: "{{ aws_key_name }}"
-        security_group: "{{ aws_security_group }}"
+        key_name: "{{ instance_label }}"
+        security_groups:
+          - "default"
         wait: yes
       register: ec2_instance
 
@@ -67,7 +70,7 @@
         name: "{{ instance_label }}"
         ansible_host: "{{ ec2_instance.public_ip }}"
         ansible_user: ec2-user
-        ansible_ssh_private_key_file: "~/.ssh/{{ aws_key_name }}.pem"
+        ansible_ssh_private_key_file: "~/.ssh/{{ instance_label }}.pem"
 
 - name: Secure and configure AWS EC2 server
   hosts: "{{ instance_label }}"
