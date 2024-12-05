@@ -30,19 +30,19 @@ def generate_ssh_key():
 
     return private_key_path, public_key_path
 
-def run_ansible_playbook(playbook, vars_file, public_key_path, instance_label):
+def run_ansible_playbook(playbook, vars_file, public_key_path, instance_label, debug):
     """Run the Ansible playbook with the provided variables."""
     print(f"Running Ansible playbook: {playbook}")
-    subprocess.run(
-        [
-            "ansible-playbook", "-i", "localhost,", playbook,
-            "-e", f"@{vars_file}",
-            "-e", f"ssh_key_path={public_key_path}",
-            "-e", f"instance_label={instance_label}",
-            "--extra-vars", "ansible_ssh_extra_args='-o StrictHostKeyChecking=no'"
-        ],
-        check=True
-    )
+    verbosity = "-vvv" if debug else ""
+    command = [
+        "ansible-playbook", "-i", "localhost,", playbook,
+        "-e", f"@{vars_file}",
+        "-e", f"ssh_key_path={public_key_path}",
+        "-e", f"instance_label={instance_label}"
+    ]
+    if verbosity:
+        command.append(verbosity)
+    subprocess.run(command, check=True)
 
 def main():
     parser = argparse.ArgumentParser(
@@ -60,6 +60,11 @@ def main():
         default="c2-deploy.yaml",  # Default value if not provided
         help="Path to the Ansible playbook. Defaults to 'c2-deploy.yaml'."
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug mode for verbose Ansible output (-vvv)."
+    )
     args = parser.parse_args()
 
     private_key, public_key = generate_ssh_key()
@@ -68,7 +73,7 @@ def main():
     instance_label = generate_random_string(12)
     print(f"Generated random instance label: {instance_label}")
 
-    run_ansible_playbook(args.playbook, args.vars_file, public_key, instance_label)
+    run_ansible_playbook(args.playbook, args.vars_file, public_key, instance_label, args.debug)
 
 if __name__ == "__main__":
     main()

@@ -85,7 +85,6 @@
           - dnsenum
           - seclists
           - responder
-          - setoolkit
           - golang
           - proxychains
           - tor

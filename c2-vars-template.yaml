@@ -1,16 +1,35 @@
 linode_token: "TOKEN"
 region_choices:
-  - us-east
-  - us-southeast
+  - ap-west
+  - ca-central
+  - ap-southeast
+  - us-iad
+  - us-ord
+  - fr-par
+  - us-sea
+  - br-gru
+  - nl-ams
+  - se-sto
+  - es-mad
+  - in-maa
+  - jp-osa
+  - it-mil
+  - us-mia
+  - id-cgk
+  - us-lax
+  - gb-lon
+  - au-mel
+  - in-bom-2
+  - de-fra-2
+  - sg-sin-2
   - us-central
   - us-west
-  - ca-central
+  - us-southeast
+  - us-east
   - eu-west
-  - eu-central
   - ap-south
-  - ap-southeast
-  - ap-southeast-2
+  - eu-central
   - ap-northeast
-plan: "g6-standard-4"
+plan: "g6-standard-2"
 image: "linode/kali"
 base_url: "{{ ansible_host }}"
