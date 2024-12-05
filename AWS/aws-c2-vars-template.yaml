@@ -12,7 +12,5 @@ aws_region_choices:
   - ap-southeast-1
   - ap-southeast-2
   - sa-east-1
-aws_key_name: "aws-c2-key"  # Name of the key pair
-aws_security_group: "aws-c2-sg"  # Security group name
 aws_instance_type: "t2.medium"  # EC2 instance type
 aws_ami: "ami-061b17d332829ab1c"  # Kali Linux AMI

@@ -1,24 +1,32 @@
+Here’s the updated README to reflect the latest changes:
+
+---
+
 # **C2ingRed: Automated C2 Server Deployment**
 
-Welcome to **C2ingRed**, a project designed to automate the deployment of a Command and Control (C2) server on Linode instances using Ansible and Python. This project simplifies the setup and configuration of a secure, operational C2 server equipped with popular red team tools.
+Welcome to **C2ingRed**, a project designed to automate the deployment of Command and Control (C2) servers on cloud platforms (Linode and AWS) using Ansible and Python. This project simplifies the setup and configuration of a secure, operational C2 server equipped with popular red team tools.
 
 ---
 
 ## **Features**
 
-- **Automated Deployment**:
-  - Provisions Linode instances with randomized regions and instance names to minimize IOCs.
-  - Automatically generates and configures secure SSH keys.
+- **Multi-Provider Deployment**:
+  - Supports both **Linode** and **AWS** for flexible server provisioning.
+  - Automatically handles region selection, instance naming, and resource creation.
 
-- **Red Team Tool Installation**:
-  - Prepares the server with essential tools like `Sliver`, `Metasploit`, `SharpCollection`, `PEASS-ng`, and others.
+- **Automated Setup**:
+  - Installs and configures essential red team tools.
+  - Automatically generates unique SSH keys per instance.
 
-- **Security First**:
-  - Disables root password login immediately after deployment.
-  - SSH-based authentication for all access.
+- **Security-First Approach**:
+  - Enforces SSH-only access by disabling root password login.
+  - Uses randomized instance names and resources for obfuscation.
+
+- **Error Recovery**:
+  - Automatically cleans up resources if deployment fails.
 
 - **Debugging Options**:
-  - Includes a `--debug` mode to enable detailed logging for troubleshooting.
+  - Includes a `--debug` mode for verbose logging during deployment.
 
 ---
 
@@ -45,11 +53,12 @@ pip install -r requirements.txt
 
 Dependencies include:
 - [`ansible`](https://github.com/ansible/ansible): Automation tool for provisioning and configuration.
-- [`linode_api4`](https://github.com/linode/linode_api4-python): Python client for the Linode API.
+- [`linode_api4`](https://github.com/linode/linode_api4-python): Python client for the Linode API (used only for Linode deployments).
 
-#### **2. Linode API Token**
+#### **2. API Credentials**
 
-Generate a personal access token in your Linode account [here](https://cloud.linode.com/profile/tokens) and save it for use in the `c2-vars.yaml` file.
+- **Linode**: Generate a personal access token in your Linode account [here](https://cloud.linode.com/profile/tokens).
+- **AWS**: Create an IAM user with programmatic access and retrieve the access key and secret.
 
 #### **3. Optional: Virtual Environment**
 
@@ -63,44 +72,34 @@ source venv/bin/activate
 
 ### **Configuration**
 
-1. Open the `c2-vars.yaml` file in a text editor.
-2. Add your Linode API token and customize other variables as needed:
-   ```yaml
-   linode_token: "your-linode-api-token"
-   region_choices:
-     - ap-west
-     - ca-central
-     - ap-southeast
-     - us-iad
-     - us-ord
-     - fr-par
-     - us-sea
-     - br-gru
-     - nl-ams
-     - se-sto
-     - es-mad
-     - in-maa
-     - jp-osa
-     - it-mil
-     - us-mia
-     - id-cgk
-     - us-lax
-     - gb-lon
-     - au-mel
-     - in-bom-2
-     - de-fra-2
-     - sg-sin-2
-     - us-central
-     - us-west
-     - us-southeast
-     - us-east
-     - eu-west
-     - ap-south
-     - eu-central
-     - ap-northeast
-   plan: "g6-standard-2"
-   image: "linode/kali""
-   ```
+Each provider has its own directory containing playbooks and a `vars.yaml` file for configuration:
+
+#### **Linode Configuration**
+
+Edit `Linode/vars.yaml`:
+```yaml
+linode_token: "your-linode-api-token"
+region_choices:
+  - us-east
+  - us-west
+  # Additional regions...
+plan: "g6-standard-2"
+image: "linode/kali"
+```
+
+#### **AWS Configuration**
+
+Edit `AWS/vars.yaml`:
+```yaml
+aws_access_key: "your-aws-access-key"
+aws_secret_key: "your-aws-secret-key"
+aws_region_choices:
+  - us-east-1
+  - us-west-1
+  # Additional regions...
+instance_type: "t2.medium"
+ami_id: "ami-061b17d332829ab1c"  # Replace with the desired AMI
+```
 
 ---
 
@@ -108,29 +107,29 @@ source venv/bin/activate
 
 ### **Run the Deployment Script**
 
-The deployment script, `deploy.py`, automates the setup of a Linode instance and installs the necessary tools.
+The deployment script, `deploy.py`, automates the setup of a C2 server.
 
 | Argument         | Description                                               | Default Value      |
 |-------------------|-----------------------------------------------------------|--------------------|
-| `--vars-file`    | Path to the variables file for Ansible.                   | `c2-vars.yaml`    |
-| `--playbook`     | Path to the Ansible playbook file.                        | `c2-deploy.yaml`  |
+| `--provider`     | Choose the provider: `linode` or `aws`.                   | `linode`          |
+| `--vars-file`    | Path to the variables file for Ansible.                   | `Linode/vars.yaml` or `AWS/vars.yaml` |
 | `--debug`        | Enable debug mode for verbose Ansible output (`-vvv`).    | Disabled          |
 
 #### **Examples**
 
-1. **Standard Deployment**:
+1. **Linode Deployment (Default)**:
    ```bash
    python3 deploy.py
    ```
 
-2. **Verbose Debug Mode**:
+2. **AWS Deployment**:
    ```bash
-   python3 deploy.py --debug
+   python3 deploy.py --provider aws
    ```
 
-3. **Custom Variables and Playbook**:
+3. **Verbose Debug Mode**:
    ```bash
-   python3 deploy.py --vars-file custom-vars.yaml --playbook custom-playbook.yaml
+   python3 deploy.py --debug
    ```
 
 ---
@@ -139,15 +138,14 @@ The deployment script, `deploy.py`, automates the setup of a Linode instance and
 
 ### **Via `apt`**:
 - `nmap`, `netcat`, `tcpdump`, `hydra`, `john`, `hashcat`, `sqlmap`
-- `gobuster`, `dirb`, `enum4linux`, `dnsenum`, `seclists`, `responder`
+- `gobuster`, `dirb`, `enum4linux`, `dnsenum`, `seclists`, `responder`, `crackmapexec`
 
 ### **Via `pipx`**:
 - [`NetExec`](https://github.com/Pennyw0rth/NetExec)
 - [`SprayingToolkit`](https://github.com/byt3bl33d3r/SprayingToolkit)
 
-### **Via `pip`**:
+### **Via `pipx`**:
 - [`Impacket`](https://github.com/SecureAuthCorp/impacket)
-- [`CrackMapExec`](https://github.com/byt3bl33d3r/CrackMapExec)
 
 ### **Manually Installed**:
 - [`Kerbrute`](https://github.com/ropnop/kerbrute)
@@ -158,7 +156,7 @@ The deployment script, `deploy.py`, automates the setup of a Linode instance and
 
 ### **C2 Frameworks**:
 - [`Sliver`](https://github.com/BishopFox/sliver)
-- [`Metasploit Framework`](https://github.com/rapid7/metasploit-framework)
+- [`Metasploit Framework`](https://raw.githubusercontent.com/rapid7/metasploit-omnibus/master/config/templates/metasploit-framework-wrappers/msfupdate.erb)
 
 ---
 
@@ -171,7 +169,10 @@ The deployment script, `deploy.py`, automates the setup of a Linode instance and
    - Disables root password login immediately after deployment.
 
 3. **Randomization**:
-   - Randomized instance names and regions to minimize detection.
+   - Randomized instance names, SSH keys, and security group names to minimize detection.
+
+4. **Automatic Cleanup**:
+   - Cleans up resources (e.g., instances, security groups) if deployment fails.
 
 ---
 
