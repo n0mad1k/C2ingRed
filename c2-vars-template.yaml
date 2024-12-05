@@ -32,4 +32,3 @@ region_choices:
   - ap-northeast
 plan: "g6-standard-2"
 image: "linode/kali"
-base_url: "{{ ansible_host }}"

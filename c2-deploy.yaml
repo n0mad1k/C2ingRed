@@ -36,6 +36,7 @@
         name: "{{ instance_label }}"
         ansible_host: "{{ linode_instance.instance.ipv4[0] }}"
         ansible_user: root
+        ansible_ssh_private_key_file: "{{ ssh_key_path | replace('.pub', '') }}"
 
 - name: Secure and configure C2 server
   hosts: "{{ instance_label }}"
@@ -73,7 +74,6 @@
           - tmux
           - pipx
           - nmap
-          - netcat
           - tcpdump
           - hydra
           - john
@@ -98,14 +98,12 @@
 
     - name: Install tools via pipx
       ansible.builtin.shell: |
+        export PATH=$PATH:/root/.local/bin
+        pipx ensurepath
         pipx install git+https://github.com/Pennyw0rth/NetExec
-        pipx install sprayingtoolkit
-      args:
-        executable: /bin/bash
-
-    - name: Install tools via pip
-      ansible.builtin.shell: |
-        pip3 install impacket crackmapexec
+        pipx install git+https://github.com/blacklanternsecurity/TREVORspray
+        pipx install impacket
+        pipx install crackmapexec
       args:
         executable: /bin/bash
 

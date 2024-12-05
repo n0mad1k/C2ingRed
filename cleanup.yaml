@@ -1,0 +1,11 @@
+---
+- name: Cleanup Linode instance
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Delete Linode instance
+      community.general.linode_v4:
+        access_token: "{{ linode_token }}"
+        label: "{{ instance_label }}"
+        state: absent
