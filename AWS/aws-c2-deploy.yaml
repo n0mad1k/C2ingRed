@@ -6,74 +6,131 @@
   vars_files:
     - vars.yaml
   tasks:
-    - name: Select a random AWS region
-      set_fact:
-        selected_aws_region: "{{ aws_region_choices | random }}"
+    - block:
+        - name: Select a random AWS region
+          set_fact:
+            selected_aws_region: "{{ aws_region_choices | random }}"
+        
+        - name: Set AMI ID based on region
+          set_fact:
+            aws_ami: "{{ ami_map[selected_aws_region] }}"
+        
+        - name: Create an EC2 key pair
+          amazon.aws.ec2_key:
+            access_key: "{{ aws_access_key }}"
+            secret_key: "{{ aws_secret_key }}"
+            name: "{{ instance_label }}"
+            region: "{{ selected_aws_region }}"
+            state: present
+          register: key_pair
 
-    - name: Set AMI ID based on region
-      set_fact:
-        aws_ami: "{{ ami_map[selected_aws_region] }}"
+        - name: Save private key locally
+          copy:
+            content: "{{ key_pair.key.private_key }}"
+            dest: "~/.ssh/{{ instance_label }}.pem"
+            mode: "0600"
+          when: key_pair.changed
 
-    - name: Debug AWS Credentials
-      debug:
-        msg:
-          - "Access Key: {{ aws_access_key }}"
-          - "Secret Key: {{ aws_secret_key }}"
-          - "Region: {{ selected_aws_region }}"
-          - "AMI: {{ aws_ami }}"
+        - name: Launch EC2 instance
+          amazon.aws.ec2_instance:
+            aws_access_key: "{{ aws_access_key | default(omit) }}"
+            aws_secret_key: "{{ aws_secret_key | default(omit) }}"
+            region: "{{ selected_aws_region }}"
+            name: "{{ instance_label }}"
+            image_id: "{{ aws_ami }}"
+            instance_type: "{{ aws_instance_type }}"
+            key_name: "{{ instance_label }}"
+            security_groups:
+              - "default"
+            wait: no
+          register: ec2_instance
 
-    - name: Create an EC2 key pair
-      amazon.aws.ec2_key:
-        access_key: "{{ aws_access_key }}"
-        secret_key: "{{ aws_secret_key }}"
-        name: "{{ instance_label }}"
-        region: "{{ selected_aws_region }}"
-        state: present
-      register: key_pair
+        - name: Debug EC2 instance output
+          debug:
+            var: ec2_instance
 
-    - name: Debug Key Pair
-      debug:
-        var: key_pair
+        - name: Set instance_id fact for cleanup
+          set_fact:
+            instance_id: "{{ ec2_instance.instance_ids[0] | default('') }}"
+          when: ec2_instance.instances is defined and ec2_instance.instances | length > 0
 
-    - name: Save private key locally
-      copy:
-        content: "{{ key_pair.key.private_key }}"
-        dest: "~/.ssh/{{ instance_label }}.pem"
-        mode: "0600"
-      when: key_pair.changed
-    #  no_log: true
+        - name: Wait for EC2 instance to reach running state
+          amazon.aws.ec2_instance_info:
+            aws_access_key: "{{ aws_access_key | default(omit) }}"
+            aws_secret_key: "{{ aws_secret_key | default(omit) }}"
+            region: "{{ selected_aws_region }}"
+            instance_ids: "{{ ec2_instance.instance_ids }}"
+          register: instance_info
+          until: instance_info.instances[0].state.name == "running"
+          retries: 10
+          delay: 30
 
-    - name: Launch EC2 instance
-      amazon.aws.ec2_instance:
-        aws_access_key: "{{ aws_access_key | default(omit) }}"
-        aws_secret_key: "{{ aws_secret_key | default(omit) }}"
-        region: "{{ selected_aws_region }}"
-        name: "{{ instance_label }}"
-        image_id: "{{ aws_ami }}"
-        instance_type: "{{ aws_instance_type }}"
-        key_name: "{{ instance_label }}"
-        security_groups:
-          - "default"
-        wait: yes
-      register: ec2_instance
+        - name: Fetch the public IP of the instance
+          ansible.builtin.command:
+            cmd: >
+              aws ec2 describe-instances
+              --filters Name=tag:Name,Values={{ instance_label }}
+                      Name=instance-state-name,Values=running
+              --query 'Reservations[*].Instances[*].PublicIpAddress'
+              --output text
+          register: public_ip_result
+          retries: 10
+          delay: 300
+          changed_when: false
 
-    - name: Wait for instance to be reachable
-      wait_for:
-        host: "{{ ec2_instance.public_ip }}"
-        port: 22
-        delay: 10
-        timeout: 300
-        state: started
+        - name: Set instance_public_ip variable
+          ansible.builtin.set_fact:
+            instance_public_ip: "{{ public_ip_result.stdout | trim }}"
+          when: public_ip_result.stdout != ''
 
-    - name: Add EC2 instance to inventory
-      add_host:
-        name: "{{ instance_label }}"
-        ansible_host: "{{ ec2_instance.public_ip }}"
-        ansible_user: ec2-user
-        ansible_ssh_private_key_file: "~/.ssh/{{ instance_label }}.pem"
+        - name: Debug public IP
+          ansible.builtin.debug:
+            msg: "Instance public IP is {{ instance_public_ip }}"
+          when: instance_public_ip is defined
 
+        - name: Wait for SSH to be reachable
+          ansible.builtin.wait_for:
+            host: "{{ instance_public_ip }}"
+            port: 22
+            state: started
+            timeout: 300
+            sleep: 5
+          failed_when: false
+          register: wait_for_ssh_result
+
+        - name: Debug if SSH connection fails
+          ansible.builtin.command:
+            cmd: >
+              ssh -o StrictHostKeyChecking=no -i {{ private_key_path }}
+              {{ ssh_user }}@{{ instance_public_ip }} echo "SSH connection successful"
+          register: ssh_debug_result
+          when: wait_for_ssh_result.elapsed >= wait_for_ssh_result.timeout
+          ignore_errors: yes
+
+        - name: Display debug output for manual SSH attempt
+          ansible.builtin.debug:
+            var: ssh_debug_result
+          when: ssh_debug_result is defined
+
+        - name: Fail if SSH manual attempt also fails
+          ansible.builtin.fail:
+            msg: >
+              SSH connection failed for user {{ ssh_user }} to host {{ instance_public_ip }}.
+              Check your key, user, and instance configuration.
+          when: ssh_debug_result.rc != 0
+
+        - name: Attempt to SSH into the instance
+          ansible.builtin.command:
+            cmd: ssh -o StrictHostKeyChecking=no -i "{{ private_key_path }}" kali@{{ ec2_instance.instances[0].public_ip }} "echo Connected"
+          register: ssh_result
+          retries: 3
+          delay: 10
+          until: ssh_result.rc == 0
+              
 - name: Secure and configure AWS EC2 server
   hosts: "{{ instance_label }}"
+  vars:
+    ansible_user: kali
   gather_facts: true
   tasks:
     - name: Disable root password authentication for SSH immediately
