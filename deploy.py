@@ -74,14 +74,29 @@ def fetch_instance_ip(provider, instance_label):
     raise ValueError("Could not determine instance IP after multiple retries.")
 
 def ssh_into_instance(private_key_path, ip_address, username="root"):
-    """SSH into the deployed instance."""
-    print(f"Connecting to {username}@{ip_address}...")
+    """
+    SSH into the deployed instance. Retry with -o IdentitiesOnly=yes if the first attempt fails.
+    """
     ssh_command = [
         "ssh",
+        "-o", "StrictHostKeyChecking=no",
         "-i", private_key_path,
         f"{username}@{ip_address}"
     ]
-    subprocess.run(ssh_command)
+
+    print(f"Attempting SSH connection to {username}@{ip_address}...")
+
+    try:
+        subprocess.run(ssh_command, check=True)
+    except subprocess.CalledProcessError:
+        print("Initial SSH connection failed. Retrying with -o IdentitiesOnly=yes...")
+        ssh_command.insert(1, "-o")
+        ssh_command.insert(2, "IdentitiesOnly=yes")
+        try:
+            subprocess.run(ssh_command, check=True)
+        except subprocess.CalledProcessError as e:
+            print(f"SSH connection failed after retry: {e}")
+            raise e
 
 def select_region(vars_file, region_arg, provider):
     """Select the region dynamically for the provider or use the provided region."""
@@ -98,10 +113,10 @@ def select_region(vars_file, region_arg, provider):
             print(f"Randomly selected {provider.upper()} region: {selected_region}")
             return selected_region
 
-def run_ansible_playbook(playbook, vars_file, public_key_path, private_key_path, instance_label, selected_region, debug, aws_creds=None):
+def run_ansible_playbook(playbook, vars_file, public_key_path, private_key_path, instance_label, selected_region, debug, aws_creds=None, ssh_user="root"):
     """Run the Ansible playbook with the provided variables."""
     print(f"Running Ansible playbook: {playbook}")
-    
+
     verbosity = "-vvv" if debug else ""
     command = [
         "ansible-playbook",
@@ -111,6 +126,7 @@ def run_ansible_playbook(playbook, vars_file, public_key_path, private_key_path,
         "-e", f"ssh_key_path={public_key_path}",  # SSH public key
         "-e", f"private_key_path={private_key_path}",  # SSH private key
         "-e", f"instance_label={instance_label}",  # Instance label
+        "-e", f"ssh_user={ssh_user}"  # Pass the SSH user dynamically
     ]
     if selected_region:
         command.append(f"-e selected_aws_region={selected_region}")
@@ -127,81 +143,136 @@ def run_ansible_playbook(playbook, vars_file, public_key_path, private_key_path,
 
     subprocess.run(command, check=True)
 
-def cleanup_resources(provider, instance_label, private_key_path=None):
+def cleanup_resources(provider, instance_label, private_key_path=None, aws_creds=None, debug=False):
     """
     Cleanup resources by terminating instances and deleting keys from the provider and local files.
     """
     print(f"Starting cleanup for provider: {provider}, instance label: {instance_label}")
 
-    # Cleanup for AWS
-    if provider == "aws":
-        # Terminate the instance
+def run_command(command, env=None, error_msg="Command failed", debug=False):
+    """Run a shell command and return its output."""
+    try:
+        if debug:
+            print(f"Running command: {' '.join(command)}")
+            if env:
+                print(f"Environment Variables: {env}")
+        
+        # Execute the command and capture its output
+        result = subprocess.check_output(command, text=True, env=env).strip()
+        
+        if debug:
+            print(f"Command output: {result}")
+        
+        # Return the captured output
+        return result
+    except subprocess.CalledProcessError as e:
+        print(f"Error: {e}")
+        if debug and e.output:
+            print(f"Command output: {e.output}")
+        raise RuntimeError(f"{error_msg}: {str(e)}")
+
+    # AWS-specific cleanup
+    if provider == "aws" and aws_creds:
         try:
             print(f"Fetching AWS instance ID for label: {instance_label}")
-            instance_id = subprocess.check_output(
+            # Capture the instance ID output from the `run_command`
+            instance_id = run_command(
                 [
                     "aws", "ec2", "describe-instances",
-                    "--filters", f"Name=tag:Name,Values={instance_label}", "Name=instance-state-name,Values=running",
+                    "--filters", f"Name=tag:Name,Values={instance_label}",
                     "--query", "Reservations[].Instances[].InstanceId",
                     "--output", "text"
                 ],
-                text=True
-            ).strip()
+                env={
+                    **os.environ,
+                    "AWS_ACCESS_KEY_ID": aws_creds.get("access_key"),
+                    "AWS_SECRET_ACCESS_KEY": aws_creds.get("secret_key"),
+                    "AWS_SESSION_TOKEN": aws_creds.get("session_token", "")
+                },
+                error_msg="Error during AWS instance fetch",
+                debug=debug
+            )
 
+            # Check if the instance ID is valid
             if instance_id:
+                print(f"Instance ID retrieved: {instance_id}")
+
+                # Use the instance_id to terminate the instance
                 print(f"Terminating AWS instance ID: {instance_id}")
-                subprocess.run(
-                    ["aws", "ec2", "terminate-instances", "--instance-ids", instance_id],
-                    check=True
+                run_command(
+                    [
+                        "aws", "ec2", "terminate-instances",
+                        "--instance-ids", instance_id
+                    ],
+                    env={
+                        **os.environ,
+                        "AWS_ACCESS_KEY_ID": aws_creds.get("access_key"),
+                        "AWS_SECRET_ACCESS_KEY": aws_creds.get("secret_key"),
+                        "AWS_SESSION_TOKEN": aws_creds.get("session_token", "")
+                    },
+                    error_msg="Error during AWS instance termination",
+                    debug=debug
                 )
                 print(f"AWS instance {instance_id} terminated successfully.")
             else:
-                print("No running AWS instances found for the given label.")
+                print("No instance ID found for the given label. Skipping termination.")
         except Exception as e:
             print(f"Error during AWS instance termination: {e}")
+
 
         # Delete the key pair
         try:
             print(f"Deleting AWS key pair: {instance_label}")
-            subprocess.run(
-                ["aws", "ec2", "delete-key-pair", "--key-name", instance_label],
-                check=True
+            run_command(
+                [
+                    "aws", "ec2", "delete-key-pair",
+                    "--key-name", instance_label
+                ],
+                env={
+                    **os.environ,
+                    "AWS_ACCESS_KEY_ID": aws_creds.get("access_key"),
+                    "AWS_SECRET_ACCESS_KEY": aws_creds.get("secret_key"),
+                    "AWS_SESSION_TOKEN": aws_creds.get("session_token", "")
+                },
+                error_msg="Error deleting AWS key pair",
+                debug=debug
             )
             print(f"AWS key pair {instance_label} deleted successfully.")
         except Exception as e:
             print(f"Error deleting AWS key pair: {e}")
 
-    # Cleanup for Linode
+    # Linode-specific cleanup
     elif provider == "linode":
-        # Delete the Linode instance
         try:
             print(f"Deleting Linode instance with label: {instance_label}")
-            subprocess.run(
+            run_command(
                 ["linode-cli", "linodes", "delete", instance_label],
-                check=True
+                error_msg="Error during Linode instance deletion",
+                debug=debug
             )
             print(f"Linode instance {instance_label} deleted successfully.")
         except Exception as e:
             print(f"Error during Linode instance deletion: {e}")
 
-        # Delete the SSH key
         try:
             print(f"Fetching Linode SSH key ID for label: {instance_label}")
-            ssh_key_list = subprocess.check_output(
+            ssh_key_list = run_command(
                 ["linode-cli", "ssh-keys", "list", "--json"],
-                text=True
+                error_msg="Error fetching Linode SSH keys",
+                debug=debug
             )
             ssh_keys = json.loads(ssh_key_list)
             key_id = next(
-                (key["id"] for key in ssh_keys if key["label"] == instance_label), 
+                (key["id"] for key in ssh_keys if key["label"] == instance_label),
                 None
             )
 
             if key_id:
                 print(f"Deleting Linode SSH key ID: {key_id}")
-                subprocess.run(
+                run_command(
                     ["linode-cli", "ssh-keys", "delete", str(key_id)],
-                    check=True
+                    error_msg="Error deleting Linode SSH key",
+                    debug=debug
                 )
                 print(f"Linode SSH key {instance_label} deleted successfully.")
             else:
@@ -209,7 +280,7 @@ def cleanup_resources(provider, instance_label, private_key_path=None):
         except Exception as e:
             print(f"Error deleting Linode SSH key: {e}")
 
-    # Cleanup local key files
+    # Local key file cleanup
     try:
         if private_key_path:
             files_to_delete = [
@@ -235,53 +306,86 @@ def main():
     )
     parser.add_argument("--provider", choices=["linode", "aws"], default="linode", help="Choose the provider for deployment (linode or aws). Defaults to linode.")
     parser.add_argument("--region", help="Specify a region to deploy the instance. If not provided, a random region will be selected.")
-    parser.add_argument("--debug", action="store_true", help="Enable debug mode for verbose Ansible output (-vvv).")
+    parser.add_argument("--debug", action="store_true", help="Enable debug mode for verbose command and Ansible output.")
     parser.add_argument("--ssh", action="store_true", help="Automatically SSH into the instance after deployment.")
     parser.add_argument("--aws-access-key", help="AWS access key. If not provided, it is expected in the AWS vars file.")
     parser.add_argument("--aws-secret-key", help="AWS secret key. If not provided, it is expected in the AWS vars file.")
     parser.add_argument("--aws-session-token", help="Optional AWS session token for temporary credentials.")
     args = parser.parse_args()
 
+    # Generate a random label for the instance
     instance_label = generate_random_string()
     print(f"Generated random instance label: {instance_label}")
     key_name = instance_label
+
+    # Generate SSH keys
     private_key, public_key = generate_ssh_key(key_name)
 
+    # Set playbook paths based on provider
     playbook_dir = "AWS" if args.provider == "aws" else "Linode"
     playbook = os.path.join(playbook_dir, "aws-c2-deploy.yaml" if args.provider == "aws" else "c2-deploy.yaml")
     vars_file = os.path.join(playbook_dir, "vars.yaml")
+
+    # Select region
     selected_region = select_region(vars_file, args.region, args.provider)
 
     try:
+        # Run Ansible playbook
         run_ansible_playbook(
-            playbook,
-            vars_file,
-            public_key,
-            private_key,
-            instance_label,
-            selected_region,
-            args.debug,
+            playbook=playbook,
+            vars_file=vars_file,
+            public_key_path=public_key,
+            private_key_path=private_key,
+            instance_label=instance_label,
+            selected_region=selected_region,
+            debug=args.debug,
             aws_creds={
                 "access_key": args.aws_access_key,
                 "secret_key": args.aws_secret_key,
                 "session_token": args.aws_session_token
             } if args.provider == "aws" else None
         )
+
+        # SSH into the instance if requested
         if args.ssh:
             ip_address = fetch_instance_ip(args.provider, instance_label)
-            ssh_into_instance(private_key, ip_address, "kali" if args.provider == "aws" else "root")
-    except subprocess.CalledProcessError:
+            ssh_into_instance(
+                private_key_path=private_key,
+                ip_address=ip_address,
+                username="kali" if args.provider == "aws" else "root"
+            )
+
+    except subprocess.CalledProcessError as e:
+        # Handle deployment errors by running cleanup
+        print(f"Deployment failed: {e}. Initiating cleanup...")
         cleanup_resources(
-            args.provider,
-            playbook_dir,
-            vars_file,
-            instance_label,
+            provider=args.provider,
+            instance_label=instance_label,
+            private_key_path=private_key,
             aws_creds={
                 "access_key": args.aws_access_key,
                 "secret_key": args.aws_secret_key,
                 "session_token": args.aws_session_token
-            } if args.provider == "aws" else None
+            } if args.provider == "aws" else None,
+            debug=args.debug
         )
+    except Exception as e:
+        # Catch any other exceptions and perform cleanup
+        print(f"An unexpected error occurred: {e}. Initiating cleanup...")
+        cleanup_resources(
+            provider=args.provider,
+            instance_label=instance_label,
+            private_key_path=private_key,
+            aws_creds={
+                "access_key": args.aws_access_key,
+                "secret_key": args.aws_secret_key,
+                "session_token": args.aws_session_token
+            } if args.provider == "aws" else None,
+            debug=args.debug
+        )
+    else:
+        # Clean exit if everything succeeds
+        print(f"Deployment and configuration for {provider.upper()} completed successfully!")
 
 if __name__ == "__main__":
     main()

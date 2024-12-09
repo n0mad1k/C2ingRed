@@ -5,6 +5,9 @@
   connection: local
   vars_files:
     - vars.yaml
+  vars:
+    ssh_user: "kali"
+
   tasks:
     - block:
         - name: Select a random AWS region
@@ -31,6 +34,32 @@
             mode: "0600"
           when: key_pair.changed
 
+        - name: Check if a security group with required properties already exists
+          amazon.aws.ec2_security_group_info:
+            filters:
+              group-name: "security-sg"
+            region: "{{ selected_aws_region }}"
+            aws_access_key: "{{ aws_access_key }}"
+            aws_secret_key: "{{ aws_secret_key }}"
+          register: existing_sg
+          ignore_errors: yes
+
+        - name: Create a security group for the instance if it doesn't exist
+          amazon.aws.ec2_group:
+            name: "security-sg"
+            description: "Completely open security group for instance {{ instance_label }}"
+            region: "{{ selected_aws_region }}"
+            aws_access_key: "{{ aws_access_key }}"
+            aws_secret_key: "{{ aws_secret_key }}"
+            rules:
+              - proto: -1  # Allow all protocols
+                cidr_ip: "0.0.0.0/0"  # Open to all IPv4 addresses
+            rules_egress:
+              - proto: -1
+                cidr_ip: "0.0.0.0/0"
+          when: existing_sg.security_groups | length == 0
+          register: c2_sg_result
+
         - name: Launch EC2 instance
           amazon.aws.ec2_instance:
             aws_access_key: "{{ aws_access_key | default(omit) }}"
@@ -41,13 +70,14 @@
             instance_type: "{{ aws_instance_type }}"
             key_name: "{{ instance_label }}"
             security_groups:
-              - "default"
+              - "security-sg"
             wait: no
+            volumes:
+              - device_name: "/dev/xvda"
+                ebs:
+                  volume_size: 100
+                  delete_on_termination: true
           register: ec2_instance
-
-        - name: Debug EC2 instance output
-          debug:
-            var: ec2_instance
 
         - name: Set instance_id fact for cleanup
           set_fact:
@@ -61,178 +91,138 @@
             region: "{{ selected_aws_region }}"
             instance_ids: "{{ ec2_instance.instance_ids }}"
           register: instance_info
-          until: instance_info.instances[0].state.name == "running"
           retries: 10
           delay: 30
+          until: instance_info.instances[0].state.name == "running"
 
         - name: Fetch the public IP of the instance
-          ansible.builtin.command:
-            cmd: >
-              aws ec2 describe-instances
-              --filters Name=tag:Name,Values={{ instance_label }}
-                      Name=instance-state-name,Values=running
-              --query 'Reservations[*].Instances[*].PublicIpAddress'
-              --output text
-          register: public_ip_result
-          retries: 10
-          delay: 300
-          changed_when: false
+          command: >
+            aws ec2 describe-instances
+            --filters "Name=tag:Name,Values={{ instance_label }}"
+            "Name=instance-state-name,Values=running"
+            --query "Reservations[*].Instances[*].PublicIpAddress"
+            --output text
+          register: instance_ip_result
+          environment:
+            AWS_ACCESS_KEY_ID: "{{ aws_access_key }}"
+            AWS_SECRET_ACCESS_KEY: "{{ aws_secret_key }}"
+            AWS_DEFAULT_REGION: "{{ selected_aws_region }}"
+          retries: 3
+          delay: 200
+          until: instance_ip_result.stdout is not none and instance_ip_result.stdout != ""
 
         - name: Set instance_public_ip variable
           ansible.builtin.set_fact:
-            instance_public_ip: "{{ public_ip_result.stdout | trim }}"
-          when: public_ip_result.stdout != ''
+            instance_public_ip: "{{ instance_ip_result.stdout | trim }}"
+          when: instance_ip_result is defined and instance_ip_result.stdout != ""
 
-        - name: Debug public IP
-          ansible.builtin.debug:
-            msg: "Instance public IP is {{ instance_public_ip }}"
-          when: instance_public_ip is defined
+        - name: Pause for 300 seconds to allow instance initialization
+          ansible.builtin.pause:
+            seconds: 300
 
-        - name: Wait for SSH to be reachable
-          ansible.builtin.wait_for:
-            host: "{{ instance_public_ip }}"
-            port: 22
-            state: started
-            timeout: 300
-            sleep: 5
-          failed_when: false
-          register: wait_for_ssh_result
+        - name: Validate SSH connection with retries
+          block:
+            - name: Attempt SSH connection
+              ansible.builtin.command:
+                cmd: ssh -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -i "{{ private_key_path }}.pem" kali@{{ instance_public_ip }} echo "SSH connection successful"
+              delay: 100  # Adjust delay if needed
+              retries: 2
+              register: ssh_validation_result
+              ignore_errors: yes
 
-        - name: Debug if SSH connection fails
-          ansible.builtin.command:
-            cmd: >
-              ssh -o StrictHostKeyChecking=no -i {{ private_key_path }}
-              {{ ssh_user }}@{{ instance_public_ip }} echo "SSH connection successful"
-          register: ssh_debug_result
-          when: wait_for_ssh_result.elapsed >= wait_for_ssh_result.timeout
-          ignore_errors: yes
+            - name: Fail if SSH validation fails
+              ansible.builtin.fail:
+                msg: "SSH connection validation failed. Check instance settings, SSH key, and security group."
+              when: (ssh_validation_result is not defined or ssh_validation_result.rc != 0)
 
-        - name: Display debug output for manual SSH attempt
-          ansible.builtin.debug:
-            var: ssh_debug_result
-          when: ssh_debug_result is defined
+        - name: Update apt package list
+          ansible.builtin.apt:
+            update_cache: yes
 
-        - name: Fail if SSH manual attempt also fails
-          ansible.builtin.fail:
-            msg: >
-              SSH connection failed for user {{ ssh_user }} to host {{ instance_public_ip }}.
-              Check your key, user, and instance configuration.
-          when: ssh_debug_result.rc != 0
+        - name: Install base utilities and tools via apt
+          ansible.builtin.apt:
+            name:
+              - git
+              - wget
+              - curl
+              - unzip
+              - python3-pip
+              - python3-venv
+              - tmux
+              - pipx
+              - nmap
+              - tcpdump
+              - hydra
+              - john
+              - hashcat
+              - sqlmap
+              - gobuster
+              - dirb
+              - enum4linux
+              - dnsenum
+              - seclists
+              - responder
+              - golang
+              - proxychains
+              - tor
+              - crackmapexec
+            state: present
 
-        - name: Attempt to SSH into the instance
-          ansible.builtin.command:
-            cmd: ssh -o StrictHostKeyChecking=no -i "{{ private_key_path }}" kali@{{ ec2_instance.instances[0].public_ip }} "echo Connected"
-          register: ssh_result
-          retries: 3
-          delay: 10
-          until: ssh_result.rc == 0
-              
-- name: Secure and configure AWS EC2 server
-  hosts: "{{ instance_label }}"
-  vars:
-    ansible_user: kali
-  gather_facts: true
-  tasks:
-    - name: Disable root password authentication for SSH immediately
-      ansible.builtin.lineinfile:
-        path: /etc/ssh/sshd_config
-        regexp: '^#?PasswordAuthentication'
-        line: 'PasswordAuthentication no'
-        state: present
+        - name: Ensure pipx path is configured
+          ansible.builtin.shell: |
+            pipx ensurepath
+          args:
+            executable: /bin/bash
 
-    - name: Restart SSH service
-      ansible.builtin.service:
-        name: ssh
-        state: restarted
+        - name: Install tools via pipx
+          ansible.builtin.shell: |
+            export PATH=$PATH:/root/.local/bin
+            pipx ensurepath
+            pipx install git+https://github.com/Pennyw0rth/NetExec
+            pipx install git+https://github.com/blacklanternsecurity/TREVORspray
+            pipx install impacket
+          args:
+            executable: /bin/bash
 
-    - name: Update apt package list
-      ansible.builtin.apt:
-        update_cache: yes
+        - name: Download Kerbrute
+          ansible.builtin.shell: |
+            mkdir -p ~/Tools/Kerbrute
+            wget https://github.com/ropnop/kerbrute/releases/latest/download/kerbrute_linux_amd64 -O ~/Tools/Kerbrute/kerbrute
+            chmod +x ~/Tools/Kerbrute/kerbrute
+          args:
+            executable: /bin/bash
 
-    - name: Install base utilities and tools via apt
-      ansible.builtin.apt:
-        name:
-          - git
-          - wget
-          - curl
-          - unzip
-          - python3-pip
-          - python3-venv
-          - tmux
-          - pipx
-          - nmap
-          - tcpdump
-          - hydra
-          - john
-          - hashcat
-          - sqlmap
-          - gobuster
-          - dirb
-          - enum4linux
-          - dnsenum
-          - seclists
-          - responder
-          - golang
-          - proxychains
-          - tor
-          - crackmapexec
-        state: present
+        - name: Clone SharpCollection nightly builds
+          ansible.builtin.git:
+            repo: https://github.com/Flangvik/SharpCollection.git
+            dest: ~/Tools/SharpCollection
+            version: master
 
-    - name: Ensure pipx path is configured
-      ansible.builtin.shell: |
-        pipx ensurepath
-      args:
-        executable: /bin/bash
+        - name: Clone PEASS-ng
+          ansible.builtin.git:
+            repo: https://github.com/carlospolop/PEASS-ng.git
+            dest: ~/Tools/PEASS-ng
 
-    - name: Install tools via pipx
-      ansible.builtin.shell: |
-        export PATH=$PATH:/root/.local/bin
-        pipx ensurepath
-        pipx install git+https://github.com/Pennyw0rth/NetExec
-        pipx install git+https://github.com/blacklanternsecurity/TREVORspray
-        pipx install impacket
-      args:
-        executable: /bin/bash
+        - name: Clone MailSniper
+          ansible.builtin.git:
+            repo: https://github.com/dafthack/MailSniper.git
+            dest: ~/Tools/MailSniper
 
-    - name: Download Kerbrute
-      ansible.builtin.shell: |
-        mkdir -p ~/Tools/Kerbrute
-        wget https://github.com/ropnop/kerbrute/releases/latest/download/kerbrute_linux_amd64 -O ~/Tools/Kerbrute/kerbrute
-        chmod +x ~/Tools/Kerbrute/kerbrute
-      args:
-        executable: /bin/bash
+        - name: Clone Inveigh
+          ansible.builtin.git:
+            repo: https://github.com/Kevin-Robertson/Inveigh.git
+            dest: ~/Tools/Inveigh
 
-    - name: Clone SharpCollection nightly builds
-      ansible.builtin.git:
-        repo: https://github.com/Flangvik/SharpCollection.git
-        dest: ~/Tools/SharpCollection
-        version: master
+        - name: Install Sliver C2 server
+          ansible.builtin.shell: |
+            curl https://sliver.sh/install | sudo bash
+            systemctl enable sliver
+            systemctl start sliver
 
-    - name: Clone PEASS-ng
-      ansible.builtin.git:
-        repo: https://github.com/carlospolop/PEASS-ng.git
-        dest: ~/Tools/PEASS-ng
-
-    - name: Clone MailSniper
-      ansible.builtin.git:
-        repo: https://github.com/dafthack/MailSniper.git
-        dest: ~/Tools/MailSniper
-
-    - name: Clone Inveigh
-      ansible.builtin.git:
-        repo: https://github.com/Kevin-Robertson/Inveigh.git
-        dest: ~/Tools/Inveigh
-
-    - name: Install Sliver C2 server
-      ansible.builtin.shell: |
-        curl https://sliver.sh/install | sudo bash
-        systemctl enable sliver
-        systemctl start sliver
-
-    - name: Install Metasploit Framework (Nightly Build)
-      ansible.builtin.shell: |
-        curl https://raw.githubusercontent.com/rapid7/metasploit-omnibus/master/config/templates/metasploit-framework-wrappers/msfupdate.erb > ~/Tools/msfinstall
-        chmod 755 ~/Tools/msfinstall
-        ~/Tools/msfinstall
-      args:
-        executable: /bin/bash
+        - name: Install Metasploit Framework (Nightly Build)
+          ansible.builtin.shell: |
+            curl https://raw.githubusercontent.com/rapid7/metasploit-omnibus/master/config/templates/metasploit-framework-wrappers/msfupdate.erb > ~/Tools/msfinstall
+            chmod 755 ~/Tools/msfinstall
+            ~/Tools/msfinstall
+          args:
+            executable: /bin/bash
