@@ -37,3 +37,8 @@ ami_map:
   us-west-1: ami-0fbe3a8e1dcd86f23
   us-west-2: ami-030d7e8d6fbca8332
 aws_instance_type: "t2.medium"  # EC2 instance type
+domain: "example.com"
+mail_hostname: "mail.example.com"
+letsencrypt_email: "admin@example.com"
+smtp_auth_user: "phishuser"
+smtp_auth_pass: "SuperSecretPass123!"

@@ -1,7 +1,3 @@
-Here’s the updated README to reflect the latest changes:
-
----
-
 # **C2ingRed: Automated C2 Server Deployment**
 
 Welcome to **C2ingRed**, a project designed to automate the deployment of Command and Control (C2) servers on cloud platforms (Linode and AWS) using Ansible and Python. This project simplifies the setup and configuration of a secure, operational C2 server equipped with popular red team tools.
@@ -10,175 +6,82 @@ Welcome to **C2ingRed**, a project designed to automate the deployment of Comman
 
 ## **Features**
 
-- **Multi-Provider Deployment**:
-  - Supports both **Linode** and **AWS** for flexible server provisioning.
-  - Automatically handles region selection, instance naming, and resource creation.
+### **Multi-Provider Support**
+- **AWS** and **Linode** cloud platforms are supported.
+- Automates resource provisioning, configuration, and cleanup.
 
-- **Automated Setup**:
-  - Installs and configures essential red team tools.
-  - Automatically generates unique SSH keys per instance.
+### **Automated Server Configuration**
+- Installs and configures a complete C2 stack with essential red team tools.
+- Dynamically handles instance setup, including SSH keys, security groups, and domain configurations.
 
-- **Security-First Approach**:
-  - Enforces SSH-only access by disabling root password login.
-  - Uses randomized instance names and resources for obfuscation.
+### **Security Focus**
+- Implements strict SSH access policies and obfuscation techniques to enhance operational security.
+- Automatic cleanup of resources on deployment failure.
 
-- **Error Recovery**:
-  - Automatically cleans up resources if deployment fails.
-
-- **Debugging Options**:
-  - Includes a `--debug` mode for verbose logging during deployment.
-
----
-
-## **Getting Started**
-
-### **Clone the Repository**
-
-Clone this repository to your local machine:
-```bash
-git clone https://github.com/n0m4d1k/C2ingRed.git
-cd C2ingRed
-```
-
----
-
-### **Prerequisites**
-
-#### **1. Install Dependencies**
-
-This project uses a `requirements.txt` file for managing Python dependencies. Install them with:
-```bash
-pip install -r requirements.txt
-```
-
-Dependencies include:
-- [`ansible`](https://github.com/ansible/ansible): Automation tool for provisioning and configuration.
-- [`linode_api4`](https://github.com/linode/linode_api4-python): Python client for the Linode API (used only for Linode deployments).
-
-#### **2. API Credentials**
-
-- **Linode**: Generate a personal access token in your Linode account [here](https://cloud.linode.com/profile/tokens).
-- **AWS**: Create an IAM user with programmatic access and retrieve the access key and secret.
-
-#### **3. Optional: Virtual Environment**
-
-Create and activate a virtual environment to isolate dependencies:
-```bash
-python3 -m venv venv
-source venv/bin/activate
-```
-
----
-
-### **Configuration**
-
-Each provider has its own directory containing playbooks and a `vars.yaml` file for configuration:
-
-#### **Linode Configuration**
-
-Edit `Linode/vars.yaml`:
-```yaml
-linode_token: "your-linode-api-token"
-region_choices:
-  - us-east
-  - us-west
-  # Additional regions...
-plan: "g6-standard-2"
-image: "linode/kali"
-```
-
-#### **AWS Configuration**
-
-Edit `AWS/vars.yaml`:
-```yaml
-aws_access_key: "your-aws-access-key"
-aws_secret_key: "your-aws-secret-key"
-aws_region_choices:
-  - us-east-1
-  - us-west-1
-  # Additional regions...
-instance_type: "t2.medium"
-ami_id: "ami-061b17d332829ab1c"  # Replace with the desired AMI
-```
-
----
-
-## **Usage**
-
-### **Run the Deployment Script**
-
-The deployment script, `deploy.py`, automates the setup of a C2 server.
-
-| Argument         | Description                                               | Default Value      |
-|-------------------|-----------------------------------------------------------|--------------------|
-| `--provider`     | Choose the provider: `linode` or `aws`.                   | `linode`          |
-| `--vars-file`    | Path to the variables file for Ansible.                   | `Linode/vars.yaml` or `AWS/vars.yaml` |
-| `--debug`        | Enable debug mode for verbose Ansible output (`-vvv`).    | Disabled          |
-
-#### **Examples**
-
-1. **Linode Deployment (Default)**:
-   ```bash
-   python3 deploy.py
-   ```
-
-2. **AWS Deployment**:
-   ```bash
-   python3 deploy.py --provider aws
-   ```
-
-3. **Verbose Debug Mode**:
-   ```bash
-   python3 deploy.py --debug
-   ```
+### **Error Recovery and Debugging**
+- Detailed error recovery and cleanup for failed deployments.
+- Debugging mode for verbose logging and troubleshooting.
 
 ---
 
 ## **Installed Tools**
 
-### **Via `apt`**:
-- `nmap`, `netcat`, `tcpdump`, `hydra`, `john`, `hashcat`, `sqlmap`
-- `gobuster`, `dirb`, `enum4linux`, `dnsenum`, `seclists`, `responder`, `crackmapexec`
+### **APT Tools**
+- Common utilities (`git`, `wget`, `curl`, etc.)
+- Pentesting tools: `nmap`, `tcpdump`, `hydra`, `john`, `hashcat`, `sqlmap`, `gobuster`, `responder`, `crackmapexec`, `dnsenum`, and more.
 
-### **Via `pipx`**:
-- [`NetExec`](https://github.com/Pennyw0rth/NetExec)
-- [`SprayingToolkit`](https://github.com/byt3bl33d3r/SprayingToolkit)
-
-### **Via `pipx`**:
-- [`Impacket`](https://github.com/SecureAuthCorp/impacket)
-
-### **Manually Installed**:
-- [`Kerbrute`](https://github.com/ropnop/kerbrute)
-- [`SharpCollection`](https://github.com/Flangvik/SharpCollection)
-- [`PEASS-ng`](https://github.com/carlospolop/PEASS-ng)
-- [`MailSniper`](https://github.com/dafthack/MailSniper)
-- [`Inveigh`](https://github.com/Kevin-Robertson/Inveigh)
-
-### **C2 Frameworks**:
-- [`Sliver`](https://github.com/BishopFox/sliver)
-- [`Metasploit Framework`](https://raw.githubusercontent.com/rapid7/metasploit-omnibus/master/config/templates/metasploit-framework-wrappers/msfupdate.erb)
+### **Custom Tools**
+- **Python tools via pipx**:
+  - [`NetExec`](https://github.com/Pennyw0rth/NetExec)
+  - [`SprayingToolkit`](https://github.com/blacklanternsecurity/TREVORspray)
+  - [`Impacket`](https://github.com/SecureAuthCorp/impacket)
+- **Manual Installations**:
+  - [`Kerbrute`](https://github.com/ropnop/kerbrute)
+  - [`SharpCollection`](https://github.com/Flangvik/SharpCollection)
+  - [`PEASS-ng`](https://github.com/carlospolop/PEASS-ng)
+  - [`MailSniper`](https://github.com/dafthack/MailSniper)
+  - [`Inveigh`](https://github.com/Kevin-Robertson/Inveigh)
+  - ['GoPhish'](https://github.com/gophish/gophish)
+- **C2 Frameworks**:
+  - [`Sliver`](https://github.com/BishopFox/sliver)
+  - [`Metasploit`](https://github.com/rapid7/metasploit-framework)
 
 ---
 
-## **Security Features**
-
-1. **SSH Key Management**:
-   - A new SSH key is generated for each deployment and stored in `~/.ssh`.
-
-2. **Strict Access Controls**:
-   - Disables root password login immediately after deployment.
-
-3. **Randomization**:
-   - Randomized instance names, SSH keys, and security group names to minimize detection.
-
-4. **Automatic Cleanup**:
-   - Cleans up resources (e.g., instances, security groups) if deployment fails.
+Here’s the updated README section with all the parameters and updated usage instructions to include the mandatory `--aws-access-key` and `--aws-secret-key` arguments for AWS deployments:
 
 ---
 
-## **Debugging**
+## **Usage**
 
-Enable debug mode during deployment to view detailed logs:
+### **Setup and Prerequisites**
+1. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+2. Configure provider-specific variables in `vars.yaml` files:
+   - **AWS**: `AWS/vars.yaml`
+   - **Linode**: `Linode/vars.yaml`
+
+3. (Optional) Use a virtual environment:
+   ```bash
+   python3 -m venv venv
+   source venv/bin/activate
+   ```
+
+### **Run the Deployment Script**
+Deploy your C2 server by specifying the provider and required parameters:
+
 ```bash
-python3 deploy.py --debug
+python3 deploy.py --provider aws --aws-access-key <your_access_key> --aws-secret-key <your_secret_key> --debug --region us-east-1
 ```
+
+| Argument            | Description                                                       | Required        | Default Value   |
+|----------------------|-------------------------------------------------------------------|-----------------|-----------------|
+| `--provider`        | Choose between `aws` or `linode`.                                 | Yes             | `linode`        |
+| `--region`          | Specify deployment region. If not provided, a random region is chosen. | No              | Random region   |
+| `--debug`           | Enable verbose output for debugging.                              | No              | Disabled        |
+| `--ssh`             | SSH into the deployed instance after deployment.                 | No              | Disabled        |
+| `--aws-access-key`  | AWS Access Key for authentication (required for AWS provider).    | Yes (AWS only)  | None            |
+| `--aws-secret-key`  | AWS Secret Key for authentication (required for AWS provider).    | Yes (AWS only)  | None            |
+| `--aws-session-token` | Optional AWS session token for temporary credentials.          | No              | None            |

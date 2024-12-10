@@ -1,0 +1,45 @@
+Welcome to your new C2 Server!
+
+The following tools and utilities have been installed:
+
+Apt-Installed Tools:
+--------------------
+- git, wget, curl, unzip
+- python3-pip, python3-venv, pipx
+- tmux, nmap, tcpdump, hydra, john, hashcat
+- sqlmap, gobuster, dirb, enum4linux, dnsenum, seclists, responder
+- golang, proxychains, tor, crackmapexec, jq, unzip
+- postfix, certbot, opendkim, opendkim-tools
+
+Pipx-Installed Tools:
+---------------------
+- NetExec:      git+https://github.com/Pennyw0rth/NetExec
+- TREVORspray:  git+https://github.com/blacklanternsecurity/TREVORspray
+- impacket:     (various network protocols and service tools)
+
+Custom Tools Installed in ~/Tools:
+----------------------------------
+- SharpCollection:           ~/Tools/SharpCollection
+- Kerbrute:                  ~/Tools/Kerbrute
+- PEASS-ng:                  ~/Tools/PEASS-ng
+- MailSniper:                ~/Tools/MailSniper
+- Inveigh:                   ~/Tools/Inveigh
+- Gophish:                   ~/Tools/gophish (unzipped here)
+
+Other Installed C2 Frameworks:
+------------------------------
+- Metasploit Framework: system installed (run 'msfconsole')
+- Sliver C2: system installed (run 'sliver')
+
+Also, remember that many reconnaissance and attack tools are now available system-wide due to the apt and pipx installations.
+
+Once your DNS record points to this server’s public IP, you can obtain a Let’s Encrypt certificate by running:
+
+    sudo certbot certonly --non-interactive --agree-tos --email {{ letsencrypt_email }} --standalone -d {{ mail_hostname }}
+
+Remember to ensure your DNS is set correctly before running the above command.
+
+**IMPORTANT:**  
+
+Don’t forget to set up a DMARC record for your domain. Update your DNS provider’s dashboard (e.g., GoDaddy) to add a TXT record named `_dmarc` with a suitable DMARC policy (e.g., `v=DMARC1; p=reject; rua=mailto:admin@{{ domain }}; ruf=mailto:admin@{{ domain }}; pct=100`). This ensures better email deliverability and security for your domain.
+

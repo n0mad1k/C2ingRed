@@ -58,6 +58,21 @@
       ansible.builtin.apt:
         update_cache: yes
 
+    - name: Set a custom MOTD
+      template:
+        src: motd-linode.j2
+        dest: /etc/motd
+        owner: root
+        group: root
+        mode: '0644'
+      vars:
+        letsencrypt_email: "{{ letsencrypt_email }}"
+        mail_hostname: "{{ mail_hostname }}"
+    
+    - name: Hush Default Login Message
+      ansible.builtin.shell: |
+        rm -rf '/usr/bin/kali-motd'
+        
     - name: Install base utilities and tools via apt
       ansible.builtin.apt:
         name:
@@ -85,6 +100,17 @@
           - proxychains
           - tor
           - crackmapexec
+          - jq
+          - unzip
+          - postfix
+          - certbot
+          - opendkim
+          - opendkim-tools
+          - dovecot-core
+          - dovecot-imapd
+          - dovecot-pop3d
+          - dovecot-sieve
+          - dovecot-managesieved
         state: present
 
     - name: Ensure pipx path is configured
@@ -145,3 +171,171 @@
         ~/Tools/msfinstall
       args:
         executable: /bin/bash
+
+    - name: Grab GoPhish
+      ansible.builtin.shell: |
+        curl -L "$(curl -s https://api.github.com/repos/gophish/gophish/releases/latest | jq -r '.assets[] | select(.browser_download_url | contains("linux-64bit.zip")) | .browser_download_url')" -o ~/Tools/gophish.zip
+        unzip ~/Tools/gophish.zip -d ~/Tools/gophish
+        rm -rf ~/Tools/gophish.zip
+        chmod +x ~/Tools/gophish
+        ls -s /root/Tools/gophish /usr/bin/gophish
+
+    - name: Configure Postfix main.cf
+      lineinfile:
+        path: /etc/postfix/main.cf
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+      with_items:
+        - { regexp: '^myhostname', line: "myhostname = mail.{{ domain }}" }
+        - { regexp: '^mydomain', line: "mydomain = {{ domain }}" }
+        - { regexp: '^myorigin', line: "myorigin = $mydomain" }
+        - { regexp: '^inet_interfaces', line: "inet_interfaces = all" }
+        - { regexp: '^inet_protocols', line: "inet_protocols = ipv4" }
+        - { regexp: '^smtpd_banner', line: "smtpd_banner = $myhostname ESMTP $mail_name" }
+        - { regexp: '^mynetworks', line: "mynetworks = 127.0.0.0/8 [::1]/128" }
+        - { regexp: '^relay_domains', line: "relay_domains = $mydestination" }
+        - { regexp: '^smtpd_tls_cert_file', line: "smtpd_tls_cert_file = /etc/letsencrypt/live/{{ domain }}/fullchain.pem" }
+        - { regexp: '^smtpd_tls_key_file', line: "smtpd_tls_key_file = /etc/letsencrypt/live/{{ domain }}/privkey.pem" }
+        - { regexp: '^smtpd_tls_security_level', line: "smtpd_tls_security_level = encrypt" }
+        - { regexp: '^smtpd_tls_session_cache_database', line: "smtpd_tls_session_cache_database = btree:${data_directory}/smtpd_scache" }
+        - { regexp: '^smtp_tls_session_cache_database', line: "smtp_tls_session_cache_database = btree:${data_directory}/smtp_scache" }
+        - { regexp: '^smtpd_use_tls', line: "smtpd_use_tls = yes" }
+        - { regexp: '^smtpd_tls_auth_only', line: "smtpd_tls_auth_only = yes" }
+        - { regexp: '^milter_default_action', line: "milter_default_action = accept" }
+        - { regexp: '^milter_protocol', line: "milter_protocol = 6" }
+        - { regexp: '^smtpd_milters', line: "smtpd_milters = unix:/var/spool/postfix/opendkim/opendkim.sock" }
+        - { regexp: '^non_smtpd_milters', line: "non_smtpd_milters = unix:/var/spool/postfix/opendkim/opendkim.sock" }      
+
+    - name: Configure OpenDKIM
+      lineinfile:
+        path: /etc/opendkim.conf
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+      with_items:
+        - { regexp: '^Domain', line: "Domain   {{ domain }}" }
+        - { regexp: '^KeyFile', line: "KeyFile /etc/opendkim/keys/{{ domain }}/mail.private" }
+        - { regexp: '^Selector', line: "Selector mail" }
+        - { regexp: '^Socket', line: "Socket   local:/var/spool/postfix/opendkim/opendkim.sock" }
+        - { regexp: '^Syslog', line: "Syslog   yes" }
+        - { regexp: '^UMask', line: "UMask    002" }
+        - { regexp: '^Mode', line: "Mode     sv" }      
+
+    - name: Create DKIM directory
+      file:
+        path: /etc/opendkim/keys/{{ domain }}
+        state: directory
+        owner: opendkim
+        group: opendkim
+        mode: 0700      
+
+    - name: Generate DKIM keys
+      command: >
+        opendkim-genkey -D /etc/opendkim/keys/{{ domain }} -d {{ domain }} -s mail
+      args:
+        creates: /etc/opendkim/keys/{{ domain }}/mail.private      
+
+    - name: Set permissions for DKIM keys
+      file:
+        path: /etc/opendkim/keys/{{ domain }}/mail.private
+        owner: opendkim
+        group: opendkim
+        mode: 0600      
+
+    - name: Configure OpenDKIM TrustedHosts
+      copy:
+        content: |
+          127.0.0.1
+          ::1
+          localhost
+          {{ domain }}
+        dest: /etc/opendkim/TrustedHosts
+        owner: opendkim
+        group: opendkim
+        mode: 0644      
+
+    - name: Enable submission port (587) in master.cf
+      blockinfile:
+        path: /etc/postfix/master.cf
+        insertafter: '^#submission'
+        block: |
+          submission     inet  n       -       y       -       -       smtpd
+            -o syslog_name=postfix/submission
+            -o smtpd_tls_security_level=encrypt
+            -o smtpd_sasl_auth_enable=yes
+            -o smtpd_recipient_restrictions=permit_sasl_authenticated,reject
+            -o smtpd_relay_restrictions=permit_sasl_authenticated,reject
+
+    # Dovecot Configuration for SASL
+    - name: Configure Dovecot for Postfix SASL
+      blockinfile:
+        path: /etc/dovecot/conf.d/10-master.conf
+        insertafter: '^service auth {'
+        block: |
+          # Postfix smtp-auth
+          unix_listener /var/spool/postfix/private/auth {
+            mode = 0660
+            user = postfix
+            group = postfix
+          }
+
+    - name: Set Dovecot auth_mechanisms
+      lineinfile:
+        path: /etc/dovecot/conf.d/10-auth.conf
+        regexp: '^auth_mechanisms'
+        line: 'auth_mechanisms = plain login'
+
+    - name: Create Dovecot password file for SASL authentication
+      file:
+        path: /etc/dovecot/passwd
+        state: touch
+        mode: '0600'
+        owner: dovecot
+        group: dovecot
+
+    - name: Add SMTP auth user to Dovecot
+      lineinfile:
+        path: /etc/dovecot/passwd
+        line: "{{ smtp_auth_user }}:{{ smtp_auth_pass | password_hash('sha512_crypt') }}"
+
+    - name: Disable system auth and use passwd-file
+      lineinfile:
+        path: /etc/dovecot/conf.d/10-auth.conf
+        regexp: '^!include auth-system.conf.ext'
+        line: '#!include auth-system.conf.ext'
+
+    - name: Add auth-passwdfile configuration
+      blockinfile:
+        path: /etc/dovecot/conf.d/10-auth.conf
+        insertafter: '^auth_mechanisms ='
+        block: |
+          passdb {
+            driver = passwd-file
+            args = scheme=sha512_crypt /etc/dovecot/passwd
+          }
+          userdb {
+            driver = static
+            args = uid=vmail gid=vmail home=/var/vmail/%u
+          }
+
+    - name: Create vmail user/group
+      group:
+        name: vmail
+        gid: 5000
+        state: present
+
+    - name: Create vmail user
+      user:
+        name: vmail
+        uid: 5000
+        group: vmail
+        create_home: no
+
+    - name: Restart Postfix
+      service:
+        name: postfix
+        state: restarted
+
+    - name: Restart Dovecot
+      service:
+        name: dovecot
+        state: restarted

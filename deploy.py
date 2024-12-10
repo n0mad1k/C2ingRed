@@ -10,6 +10,11 @@ import time
 # Disable Ansible host key checking
 os.environ["ANSIBLE_HOST_KEY_CHECKING"] = "False"
 
+def get_linode_token(vars_file):
+    with open(vars_file, "r") as file:
+        vars_data = yaml.safe_load(file)
+        return vars_data.get("linode_token")
+
 def generate_random_string(length=12):
     """Generate a random string of letters and digits."""
     return ''.join(random.choices(string.ascii_lowercase + string.digits, k=length))
@@ -31,7 +36,7 @@ def generate_ssh_key(key_name):
     os.chmod(private_key_path, 0o600)
     return private_key_path, public_key_path
 
-def fetch_instance_ip(provider, instance_label):
+def fetch_instance_ip(provider, instance_label, linode_token=None, aws_creds=None):
     """
     Fetch the public IP of an instance based on its label and provider.
     """
@@ -39,6 +44,7 @@ def fetch_instance_ip(provider, instance_label):
     
     try:
         if provider == "aws":
+            # AWS-specific code remains unchanged
             result = subprocess.check_output(
                 [
                     "aws", "ec2", "describe-instances",
@@ -54,10 +60,21 @@ def fetch_instance_ip(provider, instance_label):
             else:
                 raise ValueError("No IP found for the instance.")
         elif provider == "linode":
+            if not linode_token:
+                raise ValueError("Linode token is required for fetching instance IP.")
+            
+            # Set LINODE_CLI_TOKEN in the environment
+            env_vars = os.environ.copy()
+            env_vars["LINODE_CLI_TOKEN"] = linode_token
+
+            # Run linode-cli with the token
+            print("Executing linode-cli command...")
             result = subprocess.check_output(
                 ["linode-cli", "linodes", "list", "--label", instance_label, "--json"],
-                text=True
+                text=True,
+                env=env_vars
             ).strip()
+            print(f"linode-cli output: {result}")
             linodes = json.loads(result)
             if linodes and "ipv4" in linodes[0]:
                 ip_address = linodes[0]["ipv4"][0]  # Extract the first IPv4 address
@@ -143,12 +160,6 @@ def run_ansible_playbook(playbook, vars_file, public_key_path, private_key_path,
 
     subprocess.run(command, check=True)
 
-def cleanup_resources(provider, instance_label, private_key_path=None, aws_creds=None, debug=False):
-    """
-    Cleanup resources by terminating instances and deleting keys from the provider and local files.
-    """
-    print(f"Starting cleanup for provider: {provider}, instance label: {instance_label}")
-
 def run_command(command, env=None, error_msg="Command failed", debug=False):
     """Run a shell command and return its output."""
     try:
@@ -157,13 +168,11 @@ def run_command(command, env=None, error_msg="Command failed", debug=False):
             if env:
                 print(f"Environment Variables: {env}")
         
-        # Execute the command and capture its output
         result = subprocess.check_output(command, text=True, env=env).strip()
         
         if debug:
             print(f"Command output: {result}")
         
-        # Return the captured output
         return result
     except subprocess.CalledProcessError as e:
         print(f"Error: {e}")
@@ -171,11 +180,26 @@ def run_command(command, env=None, error_msg="Command failed", debug=False):
             print(f"Command output: {e.output}")
         raise RuntimeError(f"{error_msg}: {str(e)}")
 
+def cleanup_resources(provider, instance_label, private_key_path=None, aws_creds=None, debug=False):
+    """
+    Cleanup resources by terminating instances and deleting keys from the provider and local files.
+    """
+    print(f"Starting cleanup for provider: {provider}, instance label: {instance_label}")
+
     # AWS-specific cleanup
     if provider == "aws" and aws_creds:
+        env_vars = {
+            **os.environ,
+            "AWS_ACCESS_KEY_ID": aws_creds.get("access_key"),
+            "AWS_SECRET_ACCESS_KEY": aws_creds.get("secret_key")
+        }
+
+        # Add AWS_SESSION_TOKEN only if it's not None
+        if aws_creds.get("session_token"):
+            env_vars["AWS_SESSION_TOKEN"] = aws_creds["session_token"]
+
         try:
             print(f"Fetching AWS instance ID for label: {instance_label}")
-            # Capture the instance ID output from the `run_command`
             instance_id = run_command(
                 [
                     "aws", "ec2", "describe-instances",
@@ -183,42 +207,28 @@ def run_command(command, env=None, error_msg="Command failed", debug=False):
                     "--query", "Reservations[].Instances[].InstanceId",
                     "--output", "text"
                 ],
-                env={
-                    **os.environ,
-                    "AWS_ACCESS_KEY_ID": aws_creds.get("access_key"),
-                    "AWS_SECRET_ACCESS_KEY": aws_creds.get("secret_key"),
-                    "AWS_SESSION_TOKEN": aws_creds.get("session_token", "")
-                },
+                env=env_vars,
                 error_msg="Error during AWS instance fetch",
                 debug=debug
             )
 
-            # Check if the instance ID is valid
             if instance_id:
-                print(f"Instance ID retrieved: {instance_id}")
-
-                # Use the instance_id to terminate the instance
                 print(f"Terminating AWS instance ID: {instance_id}")
                 run_command(
                     [
                         "aws", "ec2", "terminate-instances",
                         "--instance-ids", instance_id
                     ],
-                    env={
-                        **os.environ,
-                        "AWS_ACCESS_KEY_ID": aws_creds.get("access_key"),
-                        "AWS_SECRET_ACCESS_KEY": aws_creds.get("secret_key"),
-                        "AWS_SESSION_TOKEN": aws_creds.get("session_token", "")
-                    },
+                    env=env_vars,
                     error_msg="Error during AWS instance termination",
                     debug=debug
                 )
                 print(f"AWS instance {instance_id} terminated successfully.")
             else:
                 print("No instance ID found for the given label. Skipping termination.")
+
         except Exception as e:
             print(f"Error during AWS instance termination: {e}")
-
 
         # Delete the key pair
         try:
@@ -228,12 +238,7 @@ def run_command(command, env=None, error_msg="Command failed", debug=False):
                     "aws", "ec2", "delete-key-pair",
                     "--key-name", instance_label
                 ],
-                env={
-                    **os.environ,
-                    "AWS_ACCESS_KEY_ID": aws_creds.get("access_key"),
-                    "AWS_SECRET_ACCESS_KEY": aws_creds.get("secret_key"),
-                    "AWS_SESSION_TOKEN": aws_creds.get("session_token", "")
-                },
+                env=env_vars,
                 error_msg="Error deleting AWS key pair",
                 debug=debug
             )
@@ -243,42 +248,68 @@ def run_command(command, env=None, error_msg="Command failed", debug=False):
 
     # Linode-specific cleanup
     elif provider == "linode":
-        try:
-            print(f"Deleting Linode instance with label: {instance_label}")
-            run_command(
-                ["linode-cli", "linodes", "delete", instance_label],
-                error_msg="Error during Linode instance deletion",
-                debug=debug
-            )
-            print(f"Linode instance {instance_label} deleted successfully.")
-        except Exception as e:
-            print(f"Error during Linode instance deletion: {e}")
+            # Assuming vars_file is accessible or passed globally; adjust as needed
+            vars_file = "Linode/vars.yaml"  # Adjust path if needed
+            linode_token = get_linode_token(vars_file)
+            
+            if not linode_token:
+                print("No linode_token found in vars.yaml. Cleanup may fail due to authentication.")
+            
+            linode_env = {**os.environ}
+            if linode_token:
+                linode_env["LINODE_CLI_TOKEN"] = linode_token
 
-        try:
-            print(f"Fetching Linode SSH key ID for label: {instance_label}")
-            ssh_key_list = run_command(
-                ["linode-cli", "ssh-keys", "list", "--json"],
-                error_msg="Error fetching Linode SSH keys",
-                debug=debug
-            )
-            ssh_keys = json.loads(ssh_key_list)
-            key_id = next(
-                (key["id"] for key in ssh_keys if key["label"] == instance_label),
-                None
-            )
-
-            if key_id:
-                print(f"Deleting Linode SSH key ID: {key_id}")
-                run_command(
-                    ["linode-cli", "ssh-keys", "delete", str(key_id)],
-                    error_msg="Error deleting Linode SSH key",
+            try:
+                print(f"Fetching Linode instance ID for label: {instance_label}")
+                linodes_json = run_command(
+                    ["linode-cli", "linodes", "list", "--label", instance_label, "--json"],
+                    env=linode_env,
+                    error_msg="Error fetching Linode instances",
                     debug=debug
                 )
-                print(f"Linode SSH key {instance_label} deleted successfully.")
-            else:
-                print(f"No matching SSH key found in Linode with label {instance_label}.")
-        except Exception as e:
-            print(f"Error deleting Linode SSH key: {e}")
+
+                linodes = json.loads(linodes_json)
+                if not linodes:
+                    print(f"No instance found with label: {instance_label}")
+                else:
+                    instance_id = linodes[0]["id"]
+                    print(f"Found Linode ID: {instance_id}")
+
+                    print(f"Deleting Linode instance with ID: {instance_id}")
+                    run_command(
+                        ["linode-cli", "linodes", "delete", str(instance_id)],
+                        env=linode_env,
+                        error_msg="Error deleting Linode instance",
+                        debug=debug
+                    )
+                    print(f"Linode instance {instance_id} deleted successfully.")
+            except Exception as e:
+                print(f"Error during Linode instance deletion: {e}")
+
+            try:
+                print(f"Fetching Linode SSH key ID for label: {instance_label}")
+                ssh_key_list = run_command(
+                    ["linode-cli", "ssh-keys", "list", "--json"],
+                    env=linode_env,
+                    error_msg="Error fetching Linode SSH keys",
+                    debug=debug
+                )
+                ssh_keys = json.loads(ssh_key_list)
+                key_id = next((key["id"] for key in ssh_keys if key["label"] == instance_label), None)
+
+                if key_id:
+                    print(f"Deleting Linode SSH key ID: {key_id}")
+                    run_command(
+                        ["linode-cli", "ssh-keys", "delete", str(key_id)],
+                        env=linode_env,
+                        error_msg="Error deleting Linode SSH key",
+                        debug=debug
+                    )
+                    print(f"Linode SSH key {instance_label} deleted successfully.")
+                else:
+                    print(f"No matching SSH key found in Linode with label {instance_label}.")
+            except Exception as e:
+                print(f"Error deleting Linode SSH key: {e}")
 
     # Local key file cleanup
     try:
@@ -329,6 +360,14 @@ def main():
     # Select region
     selected_region = select_region(vars_file, args.region, args.provider)
 
+    # Retrieve Linode token if provider is Linode
+    linode_token = None
+    if args.provider == "linode":
+        linode_token = get_linode_token(vars_file)
+        if not linode_token:
+            print("Error: 'linode_token' not found in vars.yaml.")
+            exit(1)
+
     try:
         # Run Ansible playbook
         run_ansible_playbook(
@@ -348,7 +387,7 @@ def main():
 
         # SSH into the instance if requested
         if args.ssh:
-            ip_address = fetch_instance_ip(args.provider, instance_label)
+            ip_address = fetch_instance_ip(args.provider, instance_label, linode_token)
             ssh_into_instance(
                 private_key_path=private_key,
                 ip_address=ip_address,
@@ -385,7 +424,7 @@ def main():
         )
     else:
         # Clean exit if everything succeeds
-        print(f"Deployment and configuration for {provider.upper()} completed successfully!")
+        print(f"Deployment and configuration for {args.provider.upper()} completed successfully!")
 
 if __name__ == "__main__":
     main()

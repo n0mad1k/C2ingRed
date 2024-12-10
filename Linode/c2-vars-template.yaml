@@ -32,3 +32,8 @@ region_choices:
   - ap-northeast
 plan: "g6-standard-2"
 image: "linode/kali"
+domain: "example.com"
+mail_hostname: "mail.example.com"
+letsencrypt_email: "admin@example.com"
+smtp_auth_user: "phishuser"
+smtp_auth_pass: "SuperSecretPass123!"
