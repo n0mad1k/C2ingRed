@@ -37,14 +37,23 @@ def generate_ssh_key(key_name):
     return private_key_path, public_key_path
 
 def fetch_instance_ip(provider, instance_label, linode_token=None, aws_creds=None):
-    """
-    Fetch the public IP of an instance based on its label and provider.
-    """
+
     print(f"Fetching instance IP for label: {instance_label} (Provider: {provider})")
     
     try:
         if provider == "aws":
-            # AWS-specific code remains unchanged
+            if not aws_creds or not aws_creds.get("access_key") or not aws_creds.get("secret_key"):
+                raise ValueError("AWS credentials are required for fetching instance IP.")
+            
+            # Prepare environment variables with AWS credentials
+            env_vars = os.environ.copy()
+            env_vars["AWS_ACCESS_KEY_ID"] = aws_creds["access_key"]
+            env_vars["AWS_SECRET_ACCESS_KEY"] = aws_creds["secret_key"]
+            if aws_creds.get("session_token"):
+                env_vars["AWS_SESSION_TOKEN"] = aws_creds["session_token"]
+            
+            # Execute the AWS CLI command with the provided credentials
+            print("Executing AWS CLI command to fetch instance IP...")
             result = subprocess.check_output(
                 [
                     "aws", "ec2", "describe-instances",
@@ -52,13 +61,16 @@ def fetch_instance_ip(provider, instance_label, linode_token=None, aws_creds=Non
                     "--query", "Reservations[*].Instances[*].PublicIpAddress",
                     "--output", "text"
                 ],
-                text=True
+                text=True,
+                env=env_vars
             ).strip()
+            
             if result:
                 print(f"Instance IP: {result}")
                 return result
             else:
-                raise ValueError("No IP found for the instance.")
+                raise ValueError("No IP address found for the instance.")
+        
         elif provider == "linode":
             if not linode_token:
                 raise ValueError("Linode token is required for fetching instance IP.")
@@ -76,19 +88,20 @@ def fetch_instance_ip(provider, instance_label, linode_token=None, aws_creds=Non
             ).strip()
             print(f"linode-cli output: {result}")
             linodes = json.loads(result)
-            if linodes and "ipv4" in linodes[0]:
+            if linodes and "ipv4" in linodes[0] and linodes[0]["ipv4"]:
                 ip_address = linodes[0]["ipv4"][0]  # Extract the first IPv4 address
                 print(f"Instance IP: {ip_address}")
                 return ip_address
             else:
-                raise ValueError("No IP found for the instance.")
+                raise ValueError("No IP address found for the instance.")
         else:
             raise ValueError(f"Unsupported provider: {provider}")
     except subprocess.CalledProcessError as e:
         print(f"Error fetching instance IP: {e}")
         raise ValueError(f"Error fetching instance IP for provider {provider}: {e}")
-    
-    raise ValueError("Could not determine instance IP after multiple retries.")
+    except json.JSONDecodeError as e:
+        print(f"Error parsing JSON output: {e}")
+        raise ValueError(f"Invalid JSON response when fetching instance IP for provider {provider}: {e}")
 
 def ssh_into_instance(private_key_path, ip_address, username="root"):
     """
@@ -387,9 +400,29 @@ def main():
 
         # SSH into the instance if requested
         if args.ssh:
-            ip_address = fetch_instance_ip(args.provider, instance_label, linode_token)
+            if args.provider == "aws":
+                ip_address = fetch_instance_ip(
+                    provider=args.provider,
+                    instance_label=instance_label,
+                    aws_creds={
+                        "access_key": args.aws_access_key,
+                        "secret_key": args.aws_secret_key,
+                        "session_token": args.aws_session_token
+                    }
+                )
+            elif args.provider == "linode":
+                ip_address = fetch_instance_ip(
+                    provider=args.provider,
+                    instance_label=instance_label,
+                    linode_token=linode_token
+                )
+
+        # Dynamically set the SSH private key path
+            ssh_dir = os.path.expanduser("~/.ssh")
+            ssh_private_key = f"{ssh_dir}/{instance_label}.pem" if args.provider == "aws" else f"{ssh_dir}/{instance_label}"
+    
             ssh_into_instance(
-                private_key_path=private_key,
+                private_key_path=ssh_private_key,
                 ip_address=ip_address,
                 username="kali" if args.provider == "aws" else "root"
             )

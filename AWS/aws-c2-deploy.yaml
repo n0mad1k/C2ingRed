@@ -159,6 +159,9 @@
           vars:
             letsencrypt_email: "{{ letsencrypt_email }}"
             mail_hostname: "{{ mail_hostname }}"
+            domain: "{{ domain }}"
+            gophish_admin_domain: "{{ gophish_admin_domain }}"
+            gophish_site_domain: "{{ gophish_site_domain }}"
             
         - name: Update apt package list
           ansible.builtin.apt:
@@ -281,12 +284,18 @@
             rm -rf /home/kali/Tools/gophish.zip
             chmod +x /home/kali/Tools/gophish
 
-        - name: Add gophish to /usr/bin/
+        - name: Deploy Gophish config.json with custom admin port
           become: true
-          ansible.builtin.shell:
-            ln -s /home/kali/Tools/gophish /usr/bin/gophish
+          template:
+            src: gophish-config.j2
+            dest: /home/kali/Tools/gophish/config.json
+            owner: kali
+            group: kali
+            mode: '0644'
+          vars:
+            gophish_admin_port: "{{ gophish_admin_port }}"
+            domain: "{{ domain }}"
 
-          
         - name: Configure Postfix main.cf
           lineinfile:
             path: /etc/postfix/main.cf

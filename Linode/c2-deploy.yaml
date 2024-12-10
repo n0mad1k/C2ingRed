@@ -68,6 +68,9 @@
       vars:
         letsencrypt_email: "{{ letsencrypt_email }}"
         mail_hostname: "{{ mail_hostname }}"
+        domain: "{{ domain }}"
+        gophish_admin_domain: "{{ gophish_admin_domain }}"
+        gophish_site_domain: "{{ gophish_site_domain }}"
     
     - name: Hush Default Login Message
       ansible.builtin.shell: |
@@ -178,7 +181,17 @@
         unzip ~/Tools/gophish.zip -d ~/Tools/gophish
         rm -rf ~/Tools/gophish.zip
         chmod +x ~/Tools/gophish
-        ls -s /root/Tools/gophish /usr/bin/gophish
+
+    - name: Deploy Gophish config.json with custom admin port
+      template:
+        src: gophish-config.j2
+        dest: ~/Tools/gophish/config.json
+        owner: root
+        group: root
+        mode: '0644'
+      vars:
+        gophish_admin_port: "{{ gophish_admin_port }}"
+        domain: "{{ domain }}"
 
     - name: Configure Postfix main.cf
       lineinfile:
