@@ -162,6 +162,11 @@
             domain: "{{ domain }}"
             gophish_admin_domain: "{{ gophish_admin_domain }}"
             gophish_site_domain: "{{ gophish_site_domain }}"
+
+        - name: Hush Default Login Message
+          become: true
+          ansible.builtin.shell: |
+            rm -rf '/usr/bin/kali-motd'
             
         - name: Update apt package list
           ansible.builtin.apt:
@@ -207,6 +212,7 @@
               - dovecot-pop3d
               - dovecot-sieve
               - dovecot-managesieved
+              - yq
             state: present
 
         - name: Ensure pipx path is configured

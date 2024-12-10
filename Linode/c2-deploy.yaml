@@ -114,6 +114,7 @@
           - dovecot-pop3d
           - dovecot-sieve
           - dovecot-managesieved
+          - yq
         state: present
 
     - name: Ensure pipx path is configured
