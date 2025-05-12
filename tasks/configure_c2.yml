@@ -182,17 +182,6 @@
     var: havoc_installation_result.stdout_lines
   when: havoc_installation_result.stdout_lines is defined
 
-- name: Create Havoc usage guide
-  template:
-    src: "../templates/havoc-guide.j2"
-    dest: "/root/havoc-guide.txt"
-    mode: '0600'
-    owner: root
-    group: root
-  vars:
-    c2_ip: "{{ ansible_host }}"
-    redirector_domain: "{{ redirector_subdomain }}.{{ domain }}"
-
 - name: Set up cron job for log cleaning if zero-logs enabled
   cron:
     name: "Clean logs"

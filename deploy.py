@@ -15,7 +15,7 @@ import logging
 import tempfile
 from datetime import datetime
 
-debug_mode = False
+debug_mode = True
 deployment_id = None
 
 # Constants for providers
@@ -1167,13 +1167,18 @@ def create_consistent_resource_names(config):
     config['c2_name'] = f"s-{deployment_id}"
     config['tracker_name'] = f"t-{deployment_id}"
     
-    # Ensure SSH key follows same pattern
+    # Ensure SSH key follows same pattern with provider-specific extension
     if not config.get('ssh_key'):
-        config['ssh_key'] = os.path.expanduser(f"~/.ssh/c2deploy_{deployment_id}")
+        if config.get('provider') == 'aws':
+            config['ssh_key'] = os.path.expanduser(f"~/.ssh/c2deploy_{deployment_id}.pem")
+        else:
+            config['ssh_key'] = os.path.expanduser(f"~/.ssh/c2deploy_{deployment_id}")
     
     # Set consistent public key path
     if config.get('ssh_key'):
-        config['ssh_key_path'] = f"{config['ssh_key']}.pub"
+        if config.get('provider') == 'aws' and not config['ssh_key'].endswith('.pem'):
+            config['ssh_key'] = f"{config['ssh_key']}.pem"
+        config['ssh_key_path'] = f"{config['ssh_key'].replace('.pem', '')}.pub"
         
     # Set other resource names with the same deployment ID
     config['vpc_name'] = f"vpc-{deployment_id}"
@@ -1464,6 +1469,78 @@ def deploy_infrastructure(config):
         cleanup_resources(config, interactive=False)
         return False
 
+def deploy_flokinet_redirector(config):
+    """Deploy FlokiNET redirector separately"""
+    logging.info("Deploying FlokiNET redirector...")
+    
+    # Verify redirector IP is provided
+    if not config.get('flokinet_redirector_ip'):
+        logging.error("FlokiNET redirector IP is required")
+        return False
+    
+    # Set redirector_ip in config for inventory
+    config['redirector_ip'] = config['flokinet_redirector_ip']
+    
+    # Create inventory file for redirector
+    inventory_path = create_inventory_file(config, "redirector")
+    
+    # Run the playbook
+    playbook = f"{PROVIDER_DIRS['flokinet']}/redirector.yml"
+    try:
+        success, stdout, stderr = run_ansible_playbook(
+            playbook, inventory_path, config, config.get('debug', False)
+        )
+        
+        # Clean up inventory file
+        if os.path.exists(inventory_path):
+            os.unlink(inventory_path)
+        
+        return success
+    except Exception as e:
+        logging.error(f"FlokiNET redirector deployment failed: {e}")
+        
+        # Clean up inventory file
+        if os.path.exists(inventory_path):
+            os.unlink(inventory_path)
+        
+        return False
+
+def deploy_flokinet_c2(config):
+    """Deploy FlokiNET C2 separately"""
+    logging.info("Deploying FlokiNET C2 server...")
+    
+    # Verify C2 IP is provided
+    if not config.get('flokinet_c2_ip'):
+        logging.error("FlokiNET C2 IP is required")
+        return False
+    
+    # Set c2_ip in config for inventory
+    config['c2_ip'] = config['flokinet_c2_ip']
+    
+    # Create inventory file for C2
+    inventory_path = create_inventory_file(config, "c2")
+    
+    # Run the playbook
+    playbook = f"{PROVIDER_DIRS['flokinet']}/c2.yml"
+    try:
+        success, stdout, stderr = run_ansible_playbook(
+            playbook, inventory_path, config, config.get('debug', False)
+        )
+        
+        # Clean up inventory file
+        if os.path.exists(inventory_path):
+            os.unlink(inventory_path)
+        
+        return success
+    except Exception as e:
+        logging.error(f"FlokiNET C2 deployment failed: {e}")
+        
+        # Clean up inventory file
+        if os.path.exists(inventory_path):
+            os.unlink(inventory_path)
+        
+        return False
+
 def run_tests(config):
     """Run deployment tests"""
     provider = config['provider']
@@ -1535,15 +1612,21 @@ def ssh_to_instance(config):
         print(f"{COLORS['RED']}No IP address found for {instance_type}. Cannot SSH.{COLORS['RESET']}")
         return False
     
-    # Get SSH key and user
+    # Get SSH key and user - with AWS-specific handling
     ssh_key = config.get('ssh_key')
-    if not ssh_key:
-        # For AWS, check for deployment_id specific keys with .pem extension
-        if config.get('provider') == 'aws' and config.get('deployment_id'):
-            potential_key = os.path.expanduser(f"~/.ssh/c2deploy_{config.get('deployment_id')}.pem")
-            if os.path.exists(potential_key):
-                ssh_key = potential_key
-                logging.info(f"Found AWS key at {ssh_key}")
+    if config.get('provider') == 'aws':
+        # For AWS, always look for the .pem extension key
+        deployment_id = config.get('deployment_id', '')
+        aws_key_path = os.path.expanduser(f"~/.ssh/c2deploy_{deployment_id}.pem")
+        if os.path.exists(aws_key_path):
+            ssh_key = aws_key_path
+            logging.info(f"Using AWS key at {ssh_key}")
+        else:
+            # Try adding .pem to existing key path if it exists
+            potential_pem_key = f"{ssh_key}.pem" if ssh_key else ""
+            if potential_pem_key and os.path.exists(potential_pem_key):
+                ssh_key = potential_pem_key
+                logging.info(f"Found AWS key with .pem extension: {ssh_key}")
     
     if not ssh_key:
         logging.error("No SSH key specified")
