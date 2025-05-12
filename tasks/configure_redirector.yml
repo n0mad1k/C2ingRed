@@ -41,15 +41,6 @@
     owner: root
     group: root
 
-- name: Copy redirector post-install script
-  copy:
-    src: "../files/post_install_redirector.sh"
-    dest: "/root/Tools/post_install_redirector.sh"
-    mode: '0700'
-    owner: root
-    group: root
-
-
 - name: Create redirector post-install instructions
   copy:
     content: |
