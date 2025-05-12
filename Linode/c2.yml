@@ -1,0 +1,150 @@
+---
+# Linode C2 Deployment Playbook
+
+- name: Deploy Linode C2 server
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  vars_files:
+    - vars.yaml
+  vars:
+    # Default values for required variables
+    linode_region: "{{ linode_region | default(region_choices | random) }}"
+    plan: "{{ plan | default('g6-standard-2') }}"
+    # Use static value to avoid recursive templating
+    c2_image_static: "linode/kali"
+    
+    # Generate random instance name if not provided
+    c2_name: "{{ c2_name | default('node-' + 9999999999 | random | to_uuid | hash('md5') | truncate(8, True, '')) }}"
+
+  tasks:
+    - name: Validate required Linode token
+      assert:
+        that:
+          - linode_token is defined and linode_token != ""
+        fail_msg: "Linode API token is required. Set linode_token in vars.yaml or via --linode-token."
+
+    # Replace these tasks at the beginning of the playbook
+    - name: Set region for C2 server
+      set_fact:
+        c2_region_value: "{{ selected_region | default(linode_region, true) | default('us-east', true) }}"
+
+    - name: Display region selection information for debugging
+      debug:
+        msg:
+          - "Selected Region: {{ selected_region | default('Not set') }}"
+          - "Linode Region: {{ linode_region | default('Not set') }}"
+          - "Using Region: {{ c2_region_value }}"
+      when: debug | default(false) | bool
+
+    - name: Set random region only if absolutely no region specified
+      set_fact:
+        c2_region_value: "{{ region_choices | random }}"
+      when: region_choices is defined and region_choices|length > 0 and not selected_region is defined and not linode_region is defined and not c2_region_value is defined
+
+    - name: Create C2 Linode instance
+      community.general.linode_v4:
+        access_token: "{{ linode_token }}"
+        label: "{{ c2_name }}"
+        type: "{{ plan }}"
+        region: "{{ c2_region_value }}"
+        image: "linode/kali"
+        root_pass: "{{ lookup('password', '/dev/null length=16') }}"
+        authorized_keys:
+          - "{{ lookup('file', ssh_key_path) }}"
+        state: present
+      register: c2_instance
+
+    - name: Set c2_ip for later use
+      set_fact:
+        c2_ip: "{{ c2_instance.instance.ipv4[0] }}"
+        c2_instance_id: "{{ c2_instance.instance.id }}"
+
+    # Enhanced SSH wait task for Linode/c2.yml
+    - name: Wait for C2 SSH to be available
+      block:
+        - name: Initial wait for port to be open
+          wait_for:
+            host: "{{ c2_instance.instance.ipv4[0] }}"
+            port: 22
+            delay: 60
+            timeout: 180
+            state: started
+
+        - name: Additional pause for SSH initialization
+          pause:
+            seconds: 60
+          
+        - name: Test SSH connection
+          command: >
+            ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10
+            -i {{ ssh_key_path | replace('.pub', '') }} root@{{ c2_instance.instance.ipv4[0] }} echo "SSH Ready"
+          register: ssh_test
+          retries: 5
+          delay: 20
+          until: ssh_test.rc == 0
+          ignore_errors: yes
+          
+        - name: Fail if SSH test unsuccessful
+          fail:
+            msg: "Could not connect to C2 server via SSH after multiple attempts"
+          when: ssh_test.rc != 0
+
+    - name: Add C2 to inventory
+      add_host:
+        name: "c2"
+        groups: "c2servers"
+        ansible_host: "{{ c2_ip }}"
+        ansible_user: "root"
+        ansible_ssh_private_key_file: "{{ ssh_key_path | replace('.pub', '') }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+        ansible_python_interpreter: "/usr/bin/python3"  # Use remote system's Python
+
+- name: Configure C2 server
+  hosts: c2servers
+  become: true
+  gather_facts: true
+  vars_files:
+    - vars.yaml
+  vars:
+    redirector_ip: "{{ redirector_ip | default('127.0.0.1') }}"
+    c2_subdomain: "{{ c2_subdomain | default('mail') }}"
+  tasks:
+    - name: Wait for apt to be available
+      apt:
+        update_cache: yes
+      register: apt_result
+      until: apt_result is success
+      retries: 5
+      delay: 10
+    
+    - name: Disable root password authentication for SSH immediately
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?PasswordAuthentication'
+        line: 'PasswordAuthentication no'
+        state: present
+      
+    - name: Restart SSH service to apply changes
+      service:
+        name: ssh
+        state: restarted
+
+    - name: Include common tool installation tasks
+      include_tasks: "../tasks/install_tools.yml"
+      
+    - name: Include common C2 configuration tasks
+      include_tasks: "../tasks/configure_c2.yml"
+         
+    - name: Include common mail server configuration tasks
+      include_tasks: "../tasks/configure_mail.yml"
+      
+    - name: Print deployment summary
+      debug:
+        msg:
+          - "C2 Server Deployment Complete!"
+          - "-----------------------------"
+          - "C2 Server IP: {{ ansible_host }}"
+          - "C2 Server Domain: {{ domain }}"
+          - "GoPhish Admin Port: {{ gophish_admin_port }}"
+      when: not disable_summary | default(false)

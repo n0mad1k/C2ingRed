@@ -1,2 +1,7 @@
 vars.yaml
 venv
+deployment*
+config.yml
+logs/
+domainhunter/
+infrastructure_state_*.json

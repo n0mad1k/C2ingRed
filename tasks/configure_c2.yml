@@ -1,0 +1,202 @@
+---
+# Common tasks for configuring C2 server with Havoc C2 and EDR evasion
+# Shared across all providers
+
+- name: Update apt cache
+  apt:
+    update_cache: yes
+
+- name: Disable default Kali MOTD
+  file:
+    path: "{{ ansible_env.HOME }}/.hushlogin"
+    state: touch
+    mode: '0644'
+  when: ansible_distribution == "Kali GNU/Linux"
+
+- name: Set a custom MOTD
+  template:
+    src: "../templates/motd.j2"
+    dest: /etc/motd
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Install base utilities and tools via apt
+  apt:
+    name:
+      - git
+      - wget
+      - curl
+      - unzip
+      - python3-pip
+      - python3-venv
+      - tmux
+      - pipx
+      - nmap
+      - tcpdump
+      - hydra
+      - john
+      - hashcat
+      - sqlmap
+      - gobuster
+      - dirb
+      - enum4linux
+      - dnsenum
+      - seclists
+      - responder
+      - golang
+      - proxychains
+      - tor
+      - crackmapexec
+      - jq
+      - build-essential
+      - zip
+      - unzip
+      - postfix
+      - certbot
+      - opendkim
+      - opendkim-tools
+      - dovecot-core
+      - dovecot-imapd
+      - dovecot-pop3d
+      - dovecot-sieve
+      - dovecot-managesieved
+      - yq
+      - build-essential
+      # Additional Havoc C2 dependencies
+      - mingw-w64
+      - nasm
+      - cmake
+      - ninja-build
+      - libfontconfig1
+      - libglu1-mesa-dev
+      - libgtest-dev
+      - libspdlog-dev
+      - libboost-all-dev
+      - libncurses5-dev
+      - libgdbm-dev
+      - libssl-dev
+      - libreadline-dev
+      - libffi-dev
+      - libsqlite3-dev
+      - libbz2-dev
+      - mesa-common-dev
+      - qtbase5-dev
+      - qtchooser
+      - qt5-qmake
+      - qtbase5-dev-tools
+      - libqt5websockets5
+      - libqt5websockets5-dev
+    state: present
+
+- name: Create directories for operational scripts
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0700'
+    owner: root
+    group: root
+  with_items:
+    - /root/Tools
+    - /root/Tools/beacons
+    - /root/Tools/payloads
+
+- name: Copy operational scripts
+  copy:
+    src: "{{ item }}"
+    dest: "/root/Tools/{{ item | basename }}"
+    mode: '0700'
+    owner: root
+    group: root
+  with_items:
+    - "../files/clean-logs.sh"
+    - "../files/secure-exit.sh"
+    - "../files/havoc_installer.sh"
+    - "../files/secure_payload_sync.sh"
+
+- name: Create post-install instructions
+  template:
+    src: "../templates/POST_INSTALL_INSTRUCTIONS.txt.j2"
+    dest: "/root/POST_INSTALL_INSTRUCTIONS.txt"
+    mode: '0644'
+    owner: root
+    group: root
+
+- name: Set up systemd timer for payload sync
+  shell: |
+    cat > /etc/systemd/system/payload-sync.service << 'EOF'
+    [Unit]
+    Description=Secure Payload Sync Service
+    After=network-online.target
+
+    [Service]
+    Type=oneshot
+    ExecStart=/root/Tools/secure_payload_sync.sh
+    User=root
+    Group=root
+    PrivateTmp=true
+    StandardOutput=null
+
+    [Install]
+    WantedBy=multi-user.target
+    EOF
+
+    cat > /etc/systemd/system/payload-sync.timer << 'EOF'
+    [Unit]
+    Description=Secure Payload Sync Timer
+    Requires=payload-sync.service
+
+    [Timer]
+    OnBootSec=5min
+    OnUnitActiveSec=30m
+    RandomizedDelaySec=30m
+    Persistent=true
+
+    [Install]
+    WantedBy=timers.target
+    EOF
+
+    systemctl daemon-reload
+    systemctl enable payload-sync.timer
+    systemctl start payload-sync.timer
+
+- name: Install Havoc C2 Framework
+  shell: "/root/Tools/havoc_installer.sh"
+  args:
+    creates: "/root/Tools/Havoc"
+  async: 1800  # Allow 30 minutes for completion
+  poll: 0      # Don't wait for completion
+  register: havoc_installation_job
+
+- name: Wait for Havoc installation to complete
+  async_status:
+    jid: "{{ havoc_installation_job.ansible_job_id }}"
+  register: job_result
+  until: job_result.finished
+  retries: 60  # Check every 30 seconds for up to 30 minutes
+  delay: 30
+  when: havoc_installation_job is defined
+
+- name: Display Havoc installation output
+  debug:
+    var: havoc_installation_result.stdout_lines
+  when: havoc_installation_result.stdout_lines is defined
+
+- name: Create Havoc usage guide
+  template:
+    src: "../templates/havoc-guide.j2"
+    dest: "/root/havoc-guide.txt"
+    mode: '0600'
+    owner: root
+    group: root
+  vars:
+    c2_ip: "{{ ansible_host }}"
+    redirector_domain: "{{ redirector_subdomain }}.{{ domain }}"
+
+- name: Set up cron job for log cleaning if zero-logs enabled
+  cron:
+    name: "Clean logs"
+    minute: "0"
+    hour: "*/6"
+    job: "/root/Tools/clean-logs.sh > /dev/null 2>&1"
+  when: zero_logs | bool

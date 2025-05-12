@@ -1,0 +1,115 @@
+---
+# AWS Shared Infrastructure Deployment Playbook
+
+- name: Deploy shared AWS infrastructure
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  vars_files:
+    - vars.yaml
+  vars:
+    # Deployment identifiers
+    deployment_id: "{{ deployment_id | default('') }}"
+    infra_name: "infra-{{ deployment_id }}"
+    # Region settings
+    deployment_region: "{{ aws_region | default(aws_region_choices | random) }}"
+    # Check if using split regions (C2 and redirector in different regions)
+    split_regions: "{{ c2_region is defined and redirector_region is defined and c2_region != redirector_region }}"
+    # Check if only deploying one component (C2 only or redirector only)
+    single_component: "{{ c2_only | default(false) | bool or redirector_only | default(false) | bool }}"
+
+  tasks:
+    - name: Validate AWS credentials
+      assert:
+        that:
+          - aws_access_key is defined and aws_access_key != ""
+          - aws_secret_key is defined and aws_secret_key != ""
+        fail_msg: "AWS credentials are required"
+
+    - name: Skip shared infrastructure if using split regions
+      meta: end_play
+      when: split_regions | bool
+      
+    - name: Print infrastructure deployment info
+      debug:
+        msg: "Deploying shared infrastructure in {{ deployment_region }}"
+      when: not split_regions | bool and not single_component | bool
+      
+    - name: Check if deploying just C2 or just redirector
+      debug:
+        msg: "Skipping shared infrastructure for single component deployment ({{ 'C2 only' if c2_only | default(false) else 'Redirector only' }})"
+      when: single_component | bool
+      
+    - name: Skip shared infrastructure for single component deployment
+      meta: end_play
+      when: single_component | bool
+
+    - name: Create shared VPC
+      amazon.aws.ec2_vpc_net:
+        name: "{{ infra_name }}-vpc"
+        cidr_block: "10.0.0.0/16"
+        region: "{{ deployment_region }}"
+        tags:
+          Name: "{{ infra_name }}-vpc"
+          deployment_id: "{{ deployment_id }}"
+        state: present
+      register: vpc_result
+      when: not split_regions | bool and not single_component | bool
+
+    - name: Store shared VPC ID
+      set_fact:
+        shared_vpc_id: "{{ vpc_result.vpc.id }}"
+      when: not split_regions | bool and not single_component | bool and vpc_result is defined
+        
+    - name: Create internet gateway
+      amazon.aws.ec2_vpc_igw:
+        vpc_id: "{{ shared_vpc_id }}"
+        region: "{{ deployment_region }}"
+        state: present
+        tags:
+          Name: "{{ infra_name }}-igw"
+          deployment_id: "{{ deployment_id }}"
+      register: igw_result
+      when: not split_regions | bool and not single_component | bool and shared_vpc_id is defined
+
+    - name: Create subnet
+      amazon.aws.ec2_vpc_subnet:
+        vpc_id: "{{ shared_vpc_id }}"
+        cidr: "10.0.1.0/24"
+        region: "{{ deployment_region }}"
+        az: "{{ deployment_region }}a"
+        map_public: yes
+        tags:
+          Name: "{{ infra_name }}-subnet"
+          deployment_id: "{{ deployment_id }}"
+      register: subnet_result
+      when: not split_regions | bool and not single_component | bool and shared_vpc_id is defined
+
+    - name: Create routing table
+      amazon.aws.ec2_vpc_route_table:
+        vpc_id: "{{ shared_vpc_id }}"
+        region: "{{ deployment_region }}"
+        tags:
+          Name: "{{ infra_name }}-rtb"
+          deployment_id: "{{ deployment_id }}"
+        routes:
+          - dest: "0.0.0.0/0"
+            gateway_id: "{{ igw_result.gateway_id }}"
+        subnets:
+          - "{{ subnet_result.subnet.id }}"
+      register: route_table_result
+      when: not split_regions | bool and not single_component | bool and shared_vpc_id is defined and igw_result is defined and subnet_result is defined
+
+    - name: Write infrastructure info to state file
+      copy:
+        content: |
+          {
+            "vpc_id": "{{ shared_vpc_id }}",
+            "subnet_id": "{{ subnet_result.subnet.id }}",
+            "igw_id": "{{ igw_result.gateway_id }}",
+            "region": "{{ deployment_region }}",
+            "deployment_id": "{{ deployment_id }}"
+          }
+        dest: "infrastructure_state.json"
+        mode: "0600"
+      when: not split_regions | bool and not single_component | bool and shared_vpc_id is defined and subnet_result is defined and igw_result is defined

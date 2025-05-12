@@ -1,0 +1,22 @@
+#!/bin/bash
+# Let's Encrypt Certificate Setup Script
+# Run this after setting up DNS records pointing to this server
+
+# Replace these with your actual values if needed
+DOMAIN="{{ domain }}"
+SUBDOMAIN="{{ redirector_subdomain | default(cdn) }}"
+EMAIL="admin@${DOMAIN}"
+
+echo "================================================"
+echo "Let's Encrypt Certificate Setup"
+echo "================================================"
+echo
+echo "Before running this script, make sure:"
+echo "1. DNS records are set up correctly"
+echo "   - ${SUBDOMAIN}.${DOMAIN} points to $(curl -s ifconfig.me)"
+echo "2. Port 80 is open to the internet"
+echo
+echo "Run the following command to get your certificate:"
+echo "certbot --nginx -d ${SUBDOMAIN}.${DOMAIN} --non-interactive --agree-tos -m ${EMAIL}"
+echo
+echo "================================================"

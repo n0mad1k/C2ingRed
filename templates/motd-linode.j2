@@ -19,25 +19,30 @@ Pipx-Installed Tools:
 
 Custom Tools Installed in ~/Tools:
 ----------------------------------
-- SharpCollection:           /home/kali/Tools/SharpCollection
-- Kerbrute:                  /home/kali/Tools/Kerbrute
-- PEASS-ng:                  /home/kali/Tools/PEASS-ng
-- MailSniper:                /home/kali/Tools/MailSniper
-- Inveigh:                   /home/kali/Tools/Inveigh
-- Gophish:                   /home/kali/Tools/gophish (unzipped here)
+- SharpCollection:           ~/Tools/SharpCollection
+- Kerbrute:                  ~/Tools/Kerbrute
+- PEASS-ng:                  ~/Tools/PEASS-ng
+- MailSniper:                ~/Tools/MailSniper
+- Inveigh:                   ~/Tools/Inveigh
+- Gophish:                   ~/Tools/gophish (unzipped here)
 
 Other Installed C2 Frameworks:
 ------------------------------
 - Metasploit Framework: system installed (run 'msfconsole')
-- Sliver C2: system installed (run 'sliver')
+- Havoc C2: installed in /root/Tools/Havoc
 
 Also, remember that many reconnaissance and attack tools are now available system-wide due to the apt and pipx installations.
 
 Once your DNS record points to this server’s public IP, you can obtain a Let’s Encrypt certificate by running:
 
-    sudo certbot certonly --non-interactive --agree-tos --email {{ letsencrypt_email }} --standalone -d {{ mail_hostname }}
     sudo certbot certonly --non-interactive --agree-tos --email {{ letsencrypt_email }} --standalone -d {{ domain }}
+    sudo certbot certonly --non-interactive --agree-tos --email {{ letsencrypt_email }} --standalone -d mail.{{ domain }}
+    sudo certbot certonly --non-interactive --agree-tos --email {{ letsencrypt_email }} --standalone -d tracker.{{ domain }}
+    systemctl start nginx.service
+
+Remember to ensure your DNS is set correctly before running the above command.
 
 **IMPORTANT:**  
 
 Don’t forget to set up a DMARC record for your domain. Update your DNS provider’s dashboard (e.g., GoDaddy) to add a TXT record named `_dmarc` with a suitable DMARC policy (e.g., `v=DMARC1; p=reject; rua=mailto:admin@{{ domain }}; ruf=mailto:admin@{{ domain }}; pct=100`). This ensures better email deliverability and security for your domain.
+

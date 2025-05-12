@@ -1,0 +1,17 @@
+================================================================
+C2ingRed Post-Installation Instructions
+================================================================
+
+To complete your setup with SSL certificates, run:
+  /root/Tools/post_install_c2.sh
+
+This script will guide you through:
+- Setting up Let's Encrypt certificates
+- Starting required services
+- Setting up the redirector (if desired)
+- Displaying DNS configuration recommendations
+
+For enhanced OPSEC, you can also randomize ports:
+  /root/Tools/randomize_ports.sh
+
+Run these after you've configured your DNS records to point to this server.

@@ -1,0 +1,14 @@
+---
+# VPC Cleanup Process with enhanced dependency handling
+# Removed detailed cleanup tasks for ENIs, RTs, IGWs, NATs, subnets, SGs to simplify deletion
+
+# Step X: Delete VPC directly
+- name: Delete VPC {{ vpc_id }}
+  amazon.aws.ec2_vpc_net:
+    region: "{{ aws_region }}"
+    vpc_id: "{{ vpc_id }}"
+    state: absent
+  retries: 5
+  delay: 15
+  register: vpc_delete_result
+  until: vpc_delete_result is success

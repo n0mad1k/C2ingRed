@@ -29,14 +29,16 @@ Custom Tools Installed in ~/Tools:
 Other Installed C2 Frameworks:
 ------------------------------
 - Metasploit Framework: system installed (run 'msfconsole')
-- Sliver C2: system installed (run 'sliver')
+- Havoc C2: installed in /root/Tools/Havoc
 
 Also, remember that many reconnaissance and attack tools are now available system-wide due to the apt and pipx installations.
 
 Once your DNS record points to this server’s public IP, you can obtain a Let’s Encrypt certificate by running:
 
-    sudo certbot certonly --non-interactive --agree-tos --email {{ letsencrypt_email }} --standalone -d {{ mail_hostname }}
     sudo certbot certonly --non-interactive --agree-tos --email {{ letsencrypt_email }} --standalone -d {{ domain }}
+    sudo certbot certonly --non-interactive --agree-tos --email {{ letsencrypt_email }} --standalone -d mail.{{ domain }}
+    sudo certbot certonly --non-interactive --agree-tos --email {{ letsencrypt_email }} --standalone -d tracker.{{ domain }}
+    systemctl start nginx.service
 
 Remember to ensure your DNS is set correctly before running the above command.
 

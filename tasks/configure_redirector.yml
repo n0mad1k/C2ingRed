@@ -1,0 +1,116 @@
+---
+# Common task for configuring redirector with full encryption
+# Shared across all providers
+
+- name: Set a custom MOTD
+  template:
+    src: "../templates/motd-redirector.j2"
+    dest: /etc/motd
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Install required packages for redirector
+  apt:
+    name:
+      - nginx
+      - certbot
+      - python3-certbot-nginx
+      - socat
+      - netcat-openbsd
+      - secure-delete
+      - jq
+    state: present
+    update_cache: yes
+
+- name: Create directories for operational scripts
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0700'
+    owner: root
+    group: root
+  with_items:
+    - /root/Tools
+
+- name: Copy clean-logs.sh script
+  copy:
+    src: "../files/clean-logs.sh"
+    dest: /root/Tools/clean-logs.sh
+    mode: '0700'
+    owner: root
+    group: root
+
+- name: Copy redirector post-install script
+  copy:
+    src: "../files/post_install_redirector.sh"
+    dest: "/root/Tools/post_install_redirector.sh"
+    mode: '0700'
+    owner: root
+    group: root
+
+
+- name: Create redirector post-install instructions
+  copy:
+    content: |
+      ================================================================
+      C2ingRed Redirector Post-Installation Instructions
+      ================================================================
+      
+      To complete your setup with SSL certificates, run:
+        /root/Tools/post_install_redirector.sh
+      
+      This script will guide you through:
+      - Setting up Let's Encrypt certificates
+      - Starting required services
+      - Updating NGINX configuration
+      
+      For enhanced OPSEC, you can also randomize ports:
+        /root/Tools/randomize_ports.sh
+      
+      Run these after you've configured your DNS records to point to this server.
+    dest: "/root/POST_INSTALL_INSTRUCTIONS.txt"
+    mode: '0644'
+    owner: root
+    group: root
+
+- name: Configure NGINX for zero-logging if enabled
+  template:
+    src: "../templates/nginx.conf.j2"
+    dest: /etc/nginx/nginx.conf
+    mode: '0644'
+    owner: root
+    group: root
+  when: zero_logs | bool
+
+- name: Create payload directory
+  file:
+    path: /var/www/resources
+    state: directory
+    mode: '0755'
+    owner: www-data
+    group: www-data
+
+- name: Create legitimate-looking index.html
+  template:
+    src: "../templates/redirector-index.html.j2"
+    dest: /var/www/html/index.html
+    mode: '0644'
+    owner: www-data
+    group: www-data
+
+- name: Create SSL certificate setup instructions
+  template:
+    src: "../templates/setup-cert.sh.j2"
+    dest: /root/Tools/setup-cert.sh
+    mode: '0700'
+    owner: root
+    group: root
+
+- name: Set up cron job for log cleaning if zero-logs enabled
+  cron:
+    name: "Clean logs"
+    minute: "0"
+    hour: "*/6"
+    job: "/root/Tools/clean-logs.sh > /dev/null 2>&1"
+  when: zero_logs | bool

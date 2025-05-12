@@ -1,0 +1,25 @@
+# tasks/cleanup_confirmation.yml - Common task file for cleanup confirmation
+- name: Show cleanup information
+  debug:
+    msg: |
+      ************************************************
+      *              CLEANUP OPERATION               *
+      ************************************************
+      The following resources will be DELETED PERMANENTLY:
+      {% if cleanup_redirector and redirector_name is defined %}
+      - Redirector: {{ redirector_name }} ({{ redirector_ip | default('IP unknown') }})
+      {% endif %}
+      {% if cleanup_c2 and c2_name is defined %}
+      - C2 Server: {{ c2_name }} ({{ c2_ip | default('IP unknown') }})
+      {% endif %}
+  when: confirm_cleanup | bool
+
+- name: Confirm cleanup operation
+  pause:
+    prompt: "\n>>> Type 'yes' to confirm deletion or press Ctrl+C to abort <<<"
+  register: confirmation
+  when: confirm_cleanup | bool
+
+- name: Skip cleanup if not confirmed
+  meta: end_play
+  when: confirm_cleanup | bool and confirmation.user_input != 'yes'

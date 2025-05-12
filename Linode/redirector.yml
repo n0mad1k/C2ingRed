@@ -1,0 +1,137 @@
+---
+# Linode Redirector-only Deployment Playbook
+
+- name: Deploy Linode redirector
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  vars_files:
+    - vars.yaml
+  vars:
+    # Handle both region and selected_region for backward compatibility
+    selected_region: "{{ selected_region | default(region) | default(linode_region) | default(region_choices | random) }}"
+    # Use constant values directly to avoid recursive template resolution
+    redirector_image_static: "linode/debian12"
+
+  tasks:
+    - name: Validate required Linode token
+      assert:
+        that:
+          - linode_token is defined and linode_token != ""
+        fail_msg: "Linode API token is required. Set linode_token in vars.yaml or via --linode-token."
+
+    # Update the region selection logic in Linode/redirector.yml
+    - name: Set region for redirector
+      set_fact:
+        deployment_region: "{{ selected_region | default(linode_region, true) | default('us-east', true) }}"
+
+    - name: Display region selection for redirector
+      debug:
+        msg: "Using region for redirector: {{ deployment_region }}"
+      when: debug | default(false) | bool
+
+    # Only use random region as a last resort
+    - name: Set random region only if no region specified
+      set_fact:
+        deployment_region: "{{ region_choices | random }}"
+      when: region_choices is defined and region_choices|length > 0 and not selected_region is defined and not linode_region is defined and not deployment_region is defined
+
+    - name: Create redirector Linode instance
+      community.general.linode_v4:
+        access_token: "{{ linode_token }}"
+        label: "{{ redirector_name }}"
+        type: "{{ redirector_plan | default('g6-nanode-1') }}"
+        region: "{{ deployment_region }}"
+        image: "linode/debian12"
+        root_pass: "{{ lookup('password', '/dev/null length=16') }}"
+        authorized_keys:
+          - "{{ lookup('file', ssh_key_path) }}"
+        state: present
+      register: redirector_instance
+
+    - name: Set redirector_ip for later use
+      set_fact:
+        redirector_ip: "{{ redirector_instance.instance.ipv4[0] }}"
+        redirector_instance_id: "{{ redirector_instance.instance.id }}"
+
+    # Enhanced SSH wait task with better retry mechanism
+    - name: Wait for redirector SSH to be available
+      block:
+        - name: Initial wait for port to be open
+          wait_for:
+            host: "{{ redirector_instance.instance.ipv4[0] }}"
+            port: 22
+            delay: 60
+            timeout: 180
+            state: started
+
+        - name: Additional pause for SSH initialization
+          pause:
+            seconds: 60
+          
+        - name: Test SSH connection
+          command: >
+            ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10
+            -i {{ ssh_key_path | replace('.pub', '') }} root@{{ redirector_instance.instance.ipv4[0] }} echo "SSH Ready"
+          register: ssh_test
+          retries: 5
+          delay: 20
+          until: ssh_test.rc == 0
+          ignore_errors: yes
+          
+        - name: Fail if SSH test unsuccessful
+          fail:
+            msg: "Could not connect to redirector via SSH after multiple attempts"
+          when: ssh_test.rc != 0
+
+    - name: Add redirector to inventory
+      add_host:
+        name: "redirector"
+        groups: "redirectors"
+        ansible_host: "{{ redirector_ip }}"
+        ansible_user: "root"
+        ansible_ssh_private_key_file: "{{ ssh_key_path | replace('.pub', '') }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+
+- name: Configure redirector server
+  hosts: redirectors
+  become: true
+  gather_facts: true
+  vars_files:
+    - vars.yaml
+  vars:
+    c2_ip: "{{ hostvars['localhost']['c2_ip'] | default('127.0.0.1') }}"
+    redirector_subdomain: "{{ redirector_subdomain | default('cdn') }}"
+    ansible_python_interpreter: auto  # Explicitly add this line
+  tasks:
+    - name: Wait for apt to be available
+      apt:
+        update_cache: yes
+      register: apt_result
+      until: apt_result is success
+      retries: 5
+      delay: 10
+    
+    - name: Disable root password authentication for SSH immediately
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?PasswordAuthentication'
+        line: 'PasswordAuthentication no'
+        state: present
+      
+    - name: Restart SSH service to apply changes
+      service:
+        name: ssh
+        state: restarted
+      
+    - name: Include common redirector configuration tasks
+      include_tasks: "../tasks/configure_redirector.yml"
+      
+    - name: Print deployment summary
+      debug:
+        msg:
+          - "Redirector Deployment Complete!"
+          - "-------------------------------"
+          - "Redirector IP: {{ ansible_host }}"
+          - "Redirector Domain: {{ redirector_subdomain }}.{{ domain }} (Update DNS A record)"
+      when: not disable_summary | default(false)

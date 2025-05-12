@@ -1,0 +1,85 @@
+---
+# Linode/initial-infrastructure.yml
+# This playbook only creates the Linode instances without trying to configure them
+# This separation makes the deployment more reliable
+
+- name: Create Linode infrastructure
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  vars_files:
+    - vars.yaml
+  vars:
+    # Default values if not provided
+    ssh_user: "{{ ssh_user | default('root') }}"
+    linode_region: "{{ linode_region | default(region_choices | random) }}"
+    plan: "{{ plan | default('g6-standard-2') }}"
+    image: "{{ image | default('linode/kali') }}"
+    
+    # Determine what to deploy based on configuration
+    deploy_redirector: "{{ not (c2_only | default(false)) }}"
+    deploy_c2: "{{ not (redirector_only | default(false)) }}"
+    
+    # Generate random names if not provided
+    redirector_name: "{{ redirector_name | default('srv-' + 100000000 | random | to_uuid | hash('md5') | truncate(8, True, '')) }}"
+    c2_name: "{{ c2_name | default('node-' + 100000000 | random | to_uuid | hash('md5') | truncate(8, True, '')) }}"
+
+  tasks:
+    - name: Validate required Linode token
+      assert:
+        that:
+          - linode_token is defined and linode_token != ""
+        fail_msg: "Linode API token is required. Set linode_token in vars.yaml or via --linode-token."
+
+    - name: Create redirector Linode instance
+      community.general.linode_v4:
+        access_token: "{{ linode_token }}"
+        label: "{{ redirector_name }}"
+        type: "{{ plan }}"
+        region: "{{ linode_region }}"
+        image: "{{ image }}"
+        root_pass: "{{ lookup('password', '/dev/null length=24 chars=ascii_letters,digits') }}"
+        authorized_keys:
+          - "{{ lookup('file', ssh_key_path) }}"
+        state: present
+      register: redirector_instance
+      when: deploy_redirector
+
+    - name: Set redirector_ip for later use
+      set_fact:
+        redirector_instance_id: "{{ redirector_instance.instance.id }}"
+        redirector_ip: "{{ redirector_instance.instance.ipv4[0] }}"
+      when: deploy_redirector and redirector_instance is defined
+
+    - name: Create C2 Linode instance
+      community.general.linode_v4:
+        access_token: "{{ linode_token }}"
+        label: "{{ c2_name }}"
+        type: "{{ plan }}"
+        region: "{{ linode_region }}"
+        image: "{{ image }}"
+        root_pass: "{{ lookup('password', '/dev/null length=24 chars=ascii_letters,digits') }}"
+        authorized_keys:
+          - "{{ lookup('file', ssh_key_path) }}"
+        state: present
+      register: c2_instance
+      when: deploy_c2
+
+    - name: Set c2_ip for later use
+      set_fact:
+        c2_instance_id: "{{ c2_instance.instance.id }}"
+        c2_ip: "{{ c2_instance.instance.ipv4[0] }}"
+      when: deploy_c2 and c2_instance is defined
+
+    - name: Display instance information
+      debug:
+        msg: 
+          - "Linode instances created successfully!"
+          - "Waiting for instances to initialize..."
+          - "{{ 'Redirector IP: ' + redirector_ip if redirector_ip is defined else 'No redirector deployed' }}"
+          - "{{ 'C2 Server IP: ' + c2_ip if c2_ip is defined else 'No C2 server deployed' }}"
+
+    - name: Wait for instances to initialize (30 seconds)
+      pause:
+        seconds: 30
+      when: (deploy_redirector and redirector_instance is defined) or (deploy_c2 and c2_instance is defined)

@@ -1,0 +1,89 @@
+---
+# Linode/cleanup.yml
+- name: Clean up Linode infrastructure
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - vars.yaml
+  vars:
+    cleanup_redirector: "{{ (redirector_name is defined and redirector_name != '') | ternary(true, false) }}"
+    cleanup_c2: "{{ (c2_name is defined and c2_name != '') | ternary(true, false) }}"
+    cleanup_tracker: "{{ (tracker_name is defined and tracker_name != '') | ternary(true, false) }}"
+    confirm_cleanup: "{{ confirm_cleanup | default(true) }}"
+
+  tasks:
+    - name: Validate required Linode token
+      assert:
+        that:
+          - linode_token is defined and linode_token != ""
+        fail_msg: "Linode API token is required. Set linode_token in vars.yaml or via --linode-token."
+
+    - name: Cleanup resources notice
+      debug:
+        msg: |
+          ===============================================
+          CLEANUP OPERATION
+          ===============================================
+          The following resources will be DELETED PERMANENTLY:
+          {% if cleanup_redirector and redirector_name is defined %}
+          - Redirector instance: {{ redirector_name }}
+          {% endif %}
+          {% if cleanup_c2 and c2_name is defined %}
+          - C2 instance: {{ c2_name }}
+          {% endif %}
+          {% if cleanup_tracker and tracker_name is defined %}
+          - Tracker instance: {{ tracker_name }}
+          {% endif %}
+      when: confirm_cleanup | bool
+
+    - name: Confirm cleanup operation
+      pause:
+        prompt: "\n>>> Type 'yes' to confirm deletion or press Ctrl+C to abort <<<"
+      register: confirmation
+      when: confirm_cleanup | bool
+
+    - name: Skip cleanup if not confirmed
+      meta: end_play
+      when: confirm_cleanup | bool and (confirmation.user_input | default('')) != 'yes'
+      
+    - name: Delete redirector instance
+      community.general.linode_v4:
+        access_token: "{{ linode_token }}"
+        label: "{{ redirector_name }}"
+        state: absent
+      when: cleanup_redirector and redirector_name is defined and redirector_name != ""
+      register: redirector_deletion
+      ignore_errors: yes
+      
+    - name: Delete C2 instance
+      community.general.linode_v4:
+        access_token: "{{ linode_token }}"
+        label: "{{ c2_name }}"
+        state: absent
+      when: cleanup_c2 and c2_name is defined and c2_name != ""
+      register: c2_deletion
+      ignore_errors: yes
+      
+    - name: Delete tracker instance
+      community.general.linode_v4:
+        access_token: "{{ linode_token }}"
+        label: "{{ tracker_name }}"
+        state: absent
+      when: cleanup_tracker and tracker_name is defined and tracker_name != ""
+      register: tracker_deletion
+      ignore_errors: yes
+      
+    - name: Report cleanup status
+      debug:
+        msg: |
+          Cleanup results:
+          {% if redirector_deletion is defined %}
+          - Redirector {{ redirector_name }}: {{ redirector_deletion.changed | ternary('Deleted', 'Not found/Could not delete') }}
+          {% endif %}
+          {% if c2_deletion is defined %}
+          - C2 {{ c2_name }}: {{ c2_deletion.changed | ternary('Deleted', 'Not found/Could not delete') }}
+          {% endif %}
+          {% if tracker_deletion is defined and tracker_name is defined %}
+          - Tracker {{ tracker_name }}: {{ tracker_deletion.changed | ternary('Deleted', 'Not found/Could not delete') }}
+          {% endif %}

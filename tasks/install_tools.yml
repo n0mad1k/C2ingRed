@@ -1,0 +1,173 @@
+---
+# Common task for installing offensive security tools
+# Shared across all providers
+
+- name: Determine home directory path
+  set_fact:
+    home_dir: "{{ (ansible_user == 'root') | ternary('/root', '/home/' + ansible_user) }}"
+    tools_dir: "{{ (ansible_user == 'root') | ternary('/root/Tools', '/home/' + ansible_user + '/Tools') }}"
+
+- name: Create Tools directory
+  file:
+    path: "{{ tools_dir }}"
+    state: directory
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0755'
+
+- name: Install base dependencies
+  apt:
+    name:
+      - python3-pip
+      - python3-venv
+      - pipx
+      - curl
+      - wget
+      - git
+      - jq
+      - unzip
+      - tmux
+    state: present
+    update_cache: yes
+
+- name: Check if pipx is installed
+  command: which pipx
+  register: pipx_check
+  ignore_errors: true
+  changed_when: false
+
+- name: Configure pipx path
+  shell: |
+    export PATH="$PATH:{{ home_dir }}/.local/bin"
+    pipx ensurepath
+  args:
+    executable: /bin/bash
+  register: pipx_path_result
+  until: pipx_path_result is success
+  retries: 3
+  delay: 5
+  when: pipx_check.rc == 0
+
+- name: Set PATH for subsequent operations
+  set_fact:
+    custom_path: "{{ home_dir }}/.local/bin:{{ ansible_env.PATH }}"
+
+- name: Install tools via pipx
+  shell: |
+    export PATH="{{ custom_path }}"
+    pipx install git+https://github.com/Pennyw0rth/NetExec
+    pipx install git+https://github.com/blacklanternsecurity/TREVORspray
+    pipx install impacket
+  environment:
+    PATH: "{{ custom_path }}"
+  register: pipx_install_result
+  until: pipx_install_result is success
+  retries: 3
+  delay: 5
+
+- name: Install offensive security tools
+  apt:
+    name:
+      - nmap
+      - tcpdump
+      - hydra
+      - john
+      - hashcat
+      - sqlmap
+      - gobuster
+      - dirb
+      - enum4linux
+      - dnsenum
+      - seclists
+      - responder
+      - golang
+      - proxychains
+      - tor
+      - crackmapexec
+    state: present
+
+- name: Download Kerbrute
+  shell: |
+    mkdir -p {{ tools_dir }}/Kerbrute
+    wget https://github.com/ropnop/kerbrute/releases/latest/download/kerbrute_linux_amd64 -O {{ tools_dir }}/Kerbrute/kerbrute
+    chmod +x {{ tools_dir }}/Kerbrute/kerbrute
+  args:
+    executable: /bin/bash
+    creates: "{{ tools_dir }}/Kerbrute/kerbrute"
+
+- name: Clone SharpCollection nightly builds
+  git:
+    repo: https://github.com/Flangvik/SharpCollection.git
+    dest: "{{ tools_dir }}/SharpCollection"
+    version: master
+  ignore_errors: yes
+
+- name: Clone PEASS-ng
+  git:
+    repo: https://github.com/carlospolop/PEASS-ng.git
+    dest: "{{ tools_dir }}/PEASS-ng"
+  ignore_errors: yes
+
+- name: Clone MailSniper
+  git:
+    repo: https://github.com/dafthack/MailSniper.git
+    dest: "{{ tools_dir }}/MailSniper"
+  ignore_errors: yes
+
+- name: Clone Inveigh
+  git:
+    repo: https://github.com/Kevin-Robertson/Inveigh.git
+    dest: "{{ tools_dir }}/Inveigh"
+  ignore_errors: yes
+
+- name: Install Metasploit Framework (Nightly Build)
+  shell: |
+    curl https://raw.githubusercontent.com/rapid7/metasploit-omnibus/master/config/templates/metasploit-framework-wrappers/msfupdate.erb > /tmp/msfinstall
+    chmod 755 /tmp/msfinstall
+    /tmp/msfinstall
+    rm -f /tmp/msfinstall
+  args:
+    executable: /bin/bash
+    creates: /usr/bin/msfconsole
+  ignore_errors: yes
+
+- name: Ensure GoPhish directory exists
+  file:
+    path: "{{ tools_dir }}/gophish"
+    state: directory
+    mode: '0755'
+
+- name: Grab GoPhish latest release
+  shell: |
+    curl -s https://api.github.com/repos/gophish/gophish/releases/latest | jq -r '.assets[] | select(.browser_download_url | contains("linux-64bit.zip")) | .browser_download_url'
+  register: gophish_url
+  failed_when: gophish_url.stdout == ""
+  changed_when: false
+
+- name: Download and install GoPhish
+  shell: |
+    curl -L "{{ gophish_url.stdout }}" -o {{ tools_dir }}/gophish.zip
+    unzip {{ tools_dir }}/gophish.zip -d {{ tools_dir }}/gophish
+    rm -f {{ tools_dir }}/gophish.zip
+    chmod +x {{ tools_dir }}/gophish/gophish
+  args:
+    creates: "{{ tools_dir }}/gophish/gophish"
+
+- name: Deploy Gophish config.json with custom admin port
+  template:
+    src: "../templates/gophish-config.j2"
+    dest: "{{ tools_dir }}/gophish/config.json"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0644'
+  vars:
+    gophish_admin_port: "8090"
+    domain: "{{ domain }}"
+
+- name: Set proper ownership for Tools directory
+  file:
+    path: "{{ tools_dir }}"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    recurse: true
+    mode: '0755'
