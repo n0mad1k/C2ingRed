@@ -1641,7 +1641,7 @@ def ssh_to_instance(config):
         ssh_users = [config.get('ssh_user')]
     elif config['provider'] == 'aws':
         # For AWS, try multiple common usernames
-        ssh_users = ['kali', 'ec2-user', 'ubuntu', 'root']
+        ssh_users = ['kali']
     elif config['provider'] == 'linode':
         ssh_users = ['root']
     else:
@@ -1667,7 +1667,8 @@ def ssh_to_instance(config):
             "-o", "IdentitiesOnly=yes",
             "-o", "ConnectTimeout=10",
             "-i", ssh_key,
-            f"{ssh_user}@{ip}"
+            f"{ssh_user}@{ip}",
+            "tmux"
         ]
         
         # Execute SSH command with timeout
