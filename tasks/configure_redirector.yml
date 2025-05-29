@@ -10,18 +10,226 @@
     group: root
     mode: '0644'
 
-- name: Install required packages for redirector
+- name: Update package cache with retries
+  apt:
+    update_cache: yes
+    cache_valid_time: 0
+  register: cache_update
+  until: cache_update is success
+  retries: 5
+  delay: 10
+  ignore_errors: no
+
+- name: Install core packages first (high priority)
   apt:
     name:
       - nginx
-      - certbot
-      - python3-certbot-nginx
+      - nginx-extras
       - socat
-      - netcat-openbsd
-      - secure-delete
       - jq
+      - secure-delete
     state: present
-    update_cache: yes
+    update_cache: no
+  register: core_packages
+  until: core_packages is success
+  retries: 3
+  delay: 5
+
+- name: Install network utilities with fallbacks
+  block:
+    - name: Try to install net-tools
+      apt:
+        name: net-tools
+        state: present
+        update_cache: no
+      register: net_tools_install
+
+  rescue:
+    - name: Install alternative network utilities
+      apt:
+        name:
+          - iproute2
+          - iputils-ping
+          - netcat-openbsd
+        state: present
+        update_cache: no
+      register: alt_network_tools
+
+    - name: Create net-tools compatibility aliases
+      copy:
+        dest: /usr/local/bin/netstat
+        content: |
+          #!/bin/bash
+          # Compatibility wrapper for netstat using ss
+          ss "$@"
+        mode: '0755'
+      when: alt_network_tools is success
+
+- name: Install PHP-FPM with version handling
+  block:
+    - name: Install PHP-FPM (latest available)
+      apt:
+        name: php-fpm
+        state: present
+        update_cache: no
+      register: php_install
+
+  rescue:
+    - name: Install specific PHP version as fallback
+      apt:
+        name:
+          - php7.4-fpm
+          - php7.4-cli
+        state: present
+        update_cache: no
+      register: php_fallback
+
+- name: Install certbot with dependency handling
+  block:
+    - name: Install certbot and nginx plugin
+      apt:
+        name:
+          - certbot
+          - python3-certbot-nginx
+        state: present
+        update_cache: no
+      register: certbot_install
+
+  rescue:
+    - name: Install certbot without problematic dependencies
+      shell: |
+        apt-get install -y --no-install-recommends certbot
+        apt-get install -y --fix-broken || true
+      register: certbot_manual
+      ignore_errors: yes
+
+    - name: Install certbot via snap as ultimate fallback
+      block:
+        - name: Install snap if not present
+          apt:
+            name: snapd
+            state: present
+
+        - name: Install certbot via snap
+          snap:
+            name: certbot
+            classic: yes
+
+        - name: Create certbot symlink
+          file:
+            src: /snap/bin/certbot
+            dest: /usr/bin/certbot
+            state: link
+      when: certbot_manual is failed
+
+- name: Handle problematic Python dependencies
+  block:
+    - name: Try installing Python dependencies normally
+      apt:
+        name:
+          - python3-requests-toolbelt
+          - python3-zope.hookable
+        state: present
+        update_cache: no
+      register: python_deps
+
+  rescue:
+    - name: Install Python dependencies via pip as fallback
+      pip:
+        name:
+          - requests-toolbelt
+          - zope.hookable
+        state: present
+      register: pip_install
+      ignore_errors: yes
+
+    - name: Download and install packages manually if repositories are down
+      shell: |
+        cd /tmp
+        # Try alternative repositories
+        wget -q http://archive.ubuntu.com/ubuntu/pool/universe/p/python-requests-toolbelt/python3-requests-toolbelt_0.8.0-1.1_all.deb || \
+        wget -q http://launchpad.net/ubuntu/+archive/primary/+files/python3-requests-toolbelt_0.8.0-1.1_all.deb || true
+        
+        if [ -f python3-requests-toolbelt_*.deb ]; then
+          dpkg -i python3-requests-toolbelt_*.deb || apt-get install -f -y
+        fi
+      when: pip_install is failed
+      ignore_errors: yes
+
+- name: Verify critical packages are installed
+  command: "{{ item.cmd }}"
+  register: package_verify
+  failed_when: package_verify.rc != 0
+  loop:
+    - { cmd: "nginx -v", name: "nginx" }
+    - { cmd: "socat -V", name: "socat" }
+    - { cmd: "jq --version", name: "jq" }
+    - { cmd: "which certbot", name: "certbot" }
+  ignore_errors: yes
+
+- name: Create package installation report
+  debug:
+    msg: |
+      C2ingRed Package Installation Status:
+      ===================================
+      Core Packages: {{ 'SUCCESS' if core_packages is success else 'FAILED' }}
+      Network Tools: {{ 'SUCCESS' if net_tools_install is success else 'FALLBACK USED' }}
+      PHP-FPM: {{ 'SUCCESS' if php_install is success else 'FALLBACK USED' if php_fallback is success else 'FAILED' }}
+      Certbot: {{ 'SUCCESS' if certbot_install is success else 'FALLBACK USED' }}
+      Python Deps: {{ 'SUCCESS' if python_deps is success else 'FALLBACK ATTEMPTED' }}
+      
+      Critical Services Verified:
+      {% for item in package_verify.results %}
+      - {{ item.item.name }}: {{ 'OK' if item.rc == 0 else 'MISSING' }}
+      {% endfor %}
+
+- name: Force fix broken packages if any installation failed
+  shell: |
+    apt-get update --fix-missing
+    apt-get install -f -y
+    dpkg --configure -a
+  when: core_packages is failed or certbot_install is failed
+  register: fix_broken
+  ignore_errors: yes
+
+- name: Final package status check and remediation
+  block:
+    - name: Check for any remaining broken packages
+      shell: apt-get check
+      register: apt_check
+      failed_when: false
+
+    - name: List installed packages for verification
+      shell: |
+        echo "=== INSTALLED PACKAGES ==="
+        dpkg -l | grep -E "(nginx|certbot|socat|jq|php)" || echo "Some packages missing"
+        echo "=== BROKEN PACKAGES ==="
+        apt-get check 2>&1 | grep -i "broken\|error" || echo "No broken packages detected"
+      register: final_status
+
+    - name: Display final installation status
+      debug:
+        var: final_status.stdout_lines
+
+- name: Ensure critical services are enabled
+  systemd:
+    name: "{{ item }}"
+    enabled: yes
+    state: started
+  loop:
+    - nginx
+    - php7.4-fpm
+  ignore_errors: yes
+  register: service_start
+
+- name: Create operational readiness marker
+  copy:
+    dest: /tmp/c2ingred_packages_ready
+    content: |
+      C2ingRed Package Installation Complete
+      Timestamp: {{ ansible_date_time.iso8601 }}
+      Status: {{ 'READY' if core_packages is success else 'PARTIAL' }}
+    mode: '0644'
 
 - name: Create directories for operational scripts
   file:

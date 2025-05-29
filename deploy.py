@@ -312,6 +312,19 @@ def gather_common_parameters():
         if not flokinet_ips:
             return None
         config.update(flokinet_ips)
+
+    try:
+        import requests
+        suggested_ip = requests.get('https://api.ipify.org').text.strip()
+        operator_ip = input(f"\nEnter your public IP for secure access [detected: {suggested_ip}]: ") or suggested_ip
+        # Validate IP format
+        if not re.match(r'^(\d{1,3}\.){3}\d{1,3}$', operator_ip):
+            print(f"{COLORS['RED']}Invalid IP format. Using 0.0.0.0/0 (not recommended){COLORS['RESET']}")
+            operator_ip = "0.0.0.0/0"
+        config['operator_ip'] = operator_ip
+    except:
+        operator_ip = input(f"\nEnter your public IP for secure access (x.x.x.x): ")
+        config['operator_ip'] = operator_ip
     
     # Ask if user wants multi-region or cross-provider deployment
     multi_region = input(f"\n{COLORS['YELLOW']}Do you want to deploy redirector and C2 in different regions? (y/n) [default: n]: {COLORS['RESET']}").lower() == 'y'
@@ -1773,46 +1786,99 @@ def cleanup_resources(config, interactive=True):
             except Exception as e:
                 logging.error(f"Failed to remove SSH public key {pub_key_path}.pub: {e}")
     
-    # Use Ansible for cleanup with confirmation set to false
-    extra_vars = {
-        "confirm_cleanup": False,  # Skip confirmation prompt
-        "redirector_name": config.get('redirector_name'),
-        "c2_name": config.get('c2_name'),
-        "tracker_name": config.get('tracker_name'),
-        "cleanup_redirector": True,
-        "cleanup_c2": True,
-        "cleanup_tracker": config.get('deploy_tracker', False) and not config.get('integrated_tracker', False)
-    }
+    # Check for split-region deployment
+    is_split_region = provider == "aws" and 'redirector_region' in config and 'c2_region' in config and config['redirector_region'] != config['c2_region']
     
-    playbook = f"{provider_dir}/cleanup.yml"
-    if os.path.exists(playbook):
-        logging.info(f"Running cleanup playbook: {playbook}")
-        inventory_path = create_inventory_file(config, "local")
+    if is_split_region:
+        logging.info("Detected split-region deployment, cleaning up both regions...")
         
-        # Add extra vars to config for cleanup
-        cleanup_config = config.copy()
-        cleanup_config.update(extra_vars)
-        
-        try:
-            success, stdout, stderr = run_ansible_playbook(
-                playbook, inventory_path, cleanup_config, 
-                cleanup_config.get('debug', False)
-            )
+        # Clean up each region separately
+        regions_to_clean = [config['redirector_region'], config['c2_region']]
+        for region in regions_to_clean:
+            region_config = config.copy()
+            region_config['aws_region'] = region
+            region_config['selected_region'] = region
+            region_config['region'] = region
             
-            if not success:
-                logging.error(f"Cleanup playbook failed: {stderr}")
-                
-                # Log what we attempted to clean up
-                logging.error(f"Failed to clean up resources: redirector={config.get('redirector_name')}, c2={config.get('c2_name')}, tracker={config.get('tracker_name')}")
-            else:
-                logging.info("Cleanup completed successfully")
-        except Exception as e:
-            logging.error(f"Cleanup playbook failed: {e}")
-        finally:
-            if os.path.exists(inventory_path):
-                os.unlink(inventory_path)
+            logging.info(f"Cleaning up resources in region: {region}")
+            
+            # Create inventory for this region
+            inventory_path = create_inventory_file(region_config, "local")
+            
+            # Set confirmation to false for second run
+            extra_vars = {
+                "confirm_cleanup": False,
+                "redirector_name": config.get('redirector_name'),
+                "c2_name": config.get('c2_name'),
+                "tracker_name": config.get('tracker_name'),
+                "cleanup_redirector": True,
+                "cleanup_c2": True,
+                "cleanup_tracker": config.get('deploy_tracker', False) and not config.get('integrated_tracker', False),
+                "aws_region": region
+            }
+            
+            # Add extra vars to config for cleanup
+            cleanup_config = region_config.copy()
+            cleanup_config.update(extra_vars)
+            
+            playbook = f"{provider_dir}/cleanup.yml"
+            if os.path.exists(playbook):
+                try:
+                    success, stdout, stderr = run_ansible_playbook(
+                        playbook, inventory_path, cleanup_config, 
+                        cleanup_config.get('debug', False)
+                    )
+                    
+                    if not success:
+                        logging.error(f"Cleanup playbook failed in region {region}: {stderr}")
+                except Exception as e:
+                    logging.error(f"Cleanup playbook failed in region {region}: {e}")
+                finally:
+                    if os.path.exists(inventory_path):
+                        os.unlink(inventory_path)
+        
     else:
-        logging.warning(f"No cleanup playbook found at {playbook}")
+        # Standard single-region cleanup
+        # Use Ansible for cleanup with confirmation set to false
+        extra_vars = {
+            "confirm_cleanup": False,  # Skip confirmation prompt
+            "redirector_name": config.get('redirector_name'),
+            "c2_name": config.get('c2_name'),
+            "tracker_name": config.get('tracker_name'),
+            "cleanup_redirector": True,
+            "cleanup_c2": True,
+            "cleanup_tracker": config.get('deploy_tracker', False) and not config.get('integrated_tracker', False)
+        }
+        
+        playbook = f"{provider_dir}/cleanup.yml"
+        if os.path.exists(playbook):
+            logging.info(f"Running cleanup playbook: {playbook}")
+            inventory_path = create_inventory_file(config, "local")
+            
+            # Add extra vars to config for cleanup
+            cleanup_config = config.copy()
+            cleanup_config.update(extra_vars)
+            
+            try:
+                success, stdout, stderr = run_ansible_playbook(
+                    playbook, inventory_path, cleanup_config, 
+                    cleanup_config.get('debug', False)
+                )
+                
+                if not success:
+                    logging.error(f"Cleanup playbook failed: {stderr}")
+                    
+                    # Log what we attempted to clean up
+                    logging.error(f"Failed to clean up resources: redirector={config.get('redirector_name')}, c2={config.get('c2_name')}, tracker={config.get('tracker_name')}")
+                else:
+                    logging.info("Cleanup completed successfully")
+            except Exception as e:
+                logging.error(f"Cleanup playbook failed: {e}")
+            finally:
+                if os.path.exists(inventory_path):
+                    os.unlink(inventory_path)
+        else:
+            logging.warning(f"No cleanup playbook found at {playbook}")
     
     # Clean up SSH key if we generated one
     ssh_key = config.get('ssh_key')
@@ -2319,8 +2385,8 @@ def generate_deployment_info(config, success=True):
     return log_file
 
 def deploy_cross_provider(config, redirector_provider, c2_provider):
-    """Deploy infrastructure across multiple providers"""
-    # Create copies of config for each provider
+    """Deploy infrastructure across multiple providers or regions"""
+    # Create copies of config for each provider/region
     redirector_config = config.copy()
     redirector_config['provider'] = redirector_provider
     redirector_config['c2_only'] = False
@@ -2334,8 +2400,15 @@ def deploy_cross_provider(config, redirector_provider, c2_provider):
     # Set specific regions if provided
     if config.get('redirector_region'):
         redirector_config['region'] = config['redirector_region']
+        # For AWS, set both region variables
+        if redirector_provider == 'aws':
+            redirector_config['aws_region'] = config['redirector_region']
+            
     if config.get('c2_region'):
         c2_config['region'] = config['c2_region']
+        # For AWS, set both region variables
+        if c2_provider == 'aws':
+            c2_config['aws_region'] = config['c2_region']
     
     logging.info(f"Cross-provider deployment: Redirector using {redirector_provider} in {redirector_config.get('region', 'default region')}")
     
